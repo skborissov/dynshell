@@ -260,7 +260,33 @@ func Test_query_sets(t *testing.T) {
 	require.Equal(t, expectedNumberSet, *expr.getValues()[":1"])
 	require.Nil(t, expr.keyExpr())
 	require.Nil(t, expr.projExpr())
+}
 
+func Test_query_map(t *testing.T) {
+	// given
+	expectedFilterCondition := "#0 = :0"
+
+	expectedName0 := "field0"
+	expectedNames := map[string]*string{"#0": &expectedName0}
+
+	expectedValueStr0 := "mapValue0"
+	expectedValue0 := dynamodb.AttributeValue{S: &expectedValueStr0}
+	expectedValueNum0 := "123"
+	expectedValue1 := dynamodb.AttributeValue{N: &expectedValueNum0}
+
+	expectedMap := dynamodb.AttributeValue{M: map[string]*dynamodb.AttributeValue{"mapField0": &expectedValue0, "mapField1": &expectedValue1}}
+
+	// when
+	var expr params = parseQuery("", "field0 = { mapField0: 'mapValue0', mapField1: 123 }", "")
+
+	// then
+	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
+	require.Equal(t, expectedNames, expr.getNames())
+
+	require.Equal(t, 1, len(expr.getValues()))
+	require.Equal(t, expectedMap, *expr.getValues()[":0"])
+	require.Nil(t, expr.keyExpr())
+	require.Nil(t, expr.projExpr())
 }
 
 func Test_query_specialTokens(t *testing.T) {

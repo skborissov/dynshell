@@ -9,7 +9,7 @@ import (
 	"github.com/c-bata/go-prompt"
 )
 
-var commands []string = []string{"use", "query", "scan", "desc", "exit"}
+var commands []string = []string{"exit", "use", "desc", "query", "scan", "delete", "update"}
 
 func newCompleter(tableCtx *TableContext) Completer {
 	return Completer{tableCtx: tableCtx}
@@ -37,6 +37,8 @@ func (c *Completer) Complete(doc prompt.Document) []prompt.Suggest {
 		return c.completeQuery(doc)
 	case "scan":
 		return c.completeScan(doc)
+	case "delete":
+		return c.completeDelete(doc)
 	default:
 		return []prompt.Suggest{}
 	}
@@ -95,12 +97,12 @@ func (c *Completer) completeUse(doc prompt.Document) []prompt.Suggest {
 }
 
 func (c *Completer) completeQuery(doc prompt.Document) (suggestions []prompt.Suggest) {
-	matched, suggestions := c.completeKeyStart(doc)
+	matched, suggestions := c.completeKeyFirst(doc, true)
 	if matched {
 		return suggestions
 	}
 
-	matched, suggestions = c.completeKeyAnd(doc)
+	matched, suggestions = c.completeKeySecond(doc, true)
 	if matched {
 		return suggestions
 	}
@@ -119,6 +121,34 @@ func (c *Completer) completeScan(doc prompt.Document) (suggestions []prompt.Sugg
 }
 
 func (c *Completer) completeRead(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
+	readFlags := getCmdFlags(&readOpts{})
+	enumFlags := map[flag][]string{
+		findFlagByShort(readFlags, "s"): {"ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES", "SPECIFIC_ATTRIBUTES", "COUNT"},
+		findFlagByShort(readFlags, "r"): {"INDEXES", "TOTAL", "NONE"},
+		findFlagByShort(readFlags, "i"): c.tableCtx.indexNames}
+
+	return c.completeFlags(doc, unusedFlags, enumFlags)
+}
+
+func (c *Completer) completeDelete(doc prompt.Document) (suggestions []prompt.Suggest) {
+	matched, suggestions := c.completeKeyFirst(doc, false)
+	if matched {
+		return suggestions
+	}
+
+	matched, suggestions = c.completeKeySecond(doc, false)
+	if matched {
+		return suggestions
+	}
+
+	deleteFlags := getCmdFlags(&deleteOpts{})
+	enumFlags := map[flag][]string{
+		findFlagByShort(deleteFlags, "r"): {"INDEXES", "TOTAL", "NONE"}}
+
+	return c.completeFlags(doc, getUnusedFlags(doc, &deleteOpts{}), enumFlags)
+}
+
+func (c *Completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumFlags map[flag][]string) (suggestions []prompt.Suggest) {
 	if isInParameter(doc) {
 		return []prompt.Suggest{}
 	}
@@ -128,59 +158,12 @@ func (c *Completer) completeRead(doc prompt.Document, unusedFlags []flag) (sugge
 		return suggestions
 	}
 
-	readFlags := getCmdFlags(&readOpts{})
-	enumVals := map[flag][]string{
-		findFlagByShort(readFlags, "s"): {"ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES", "SPECIFIC_ATTRIBUTES", "COUNT"},
-		findFlagByShort(readFlags, "r"): {"INDEXES", "TOTAL", "NONE"},
-		findFlagByShort(readFlags, "i"): c.tableCtx.indexNames}
-	matched, suggestions = completeEnum(doc, &enumVals)
+	matched, suggestions = completeEnum(doc, &enumFlags)
 	if matched {
 		return suggestions
 	}
 
 	return []prompt.Suggest{}
-}
-
-func (c *Completer) completeKeyStart(doc prompt.Document) (matched bool, suggestions []prompt.Suggest) {
-	var rgxKeyStart = regexp.MustCompile(`.* (-k|--key) "(\s*)([a-zA-Z0-9_]*)$`)
-	matches := rgxKeyStart.FindStringSubmatch(doc.CurrentLineBeforeCursor())
-	if len(matches) > 0 {
-		matched = true
-
-		keyInput := matches[len(matches)-1]
-		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
-			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
-		}
-		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
-			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
-		}
-	}
-
-	return matched, suggestions
-}
-
-func (c *Completer) completeKeyAnd(doc prompt.Document) (matched bool, suggestions []prompt.Suggest) {
-	var rgxKeyAnd = regexp.MustCompile(`.* (-k|--key) "(.*) AND(\s+)([a-zA-Z0-9_]*)$`)
-	matches := rgxKeyAnd.FindStringSubmatch(doc.CurrentLineBeforeCursor())
-
-	if len(matches) > 0 {
-		matched = true
-
-		firstCondition := matches[2]
-		keyInput := matches[len(matches)-1]
-		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
-			if !strings.Contains(firstCondition, c.tableCtx.hashAttributeName) {
-				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
-			}
-		}
-		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
-			if !strings.Contains(firstCondition, c.tableCtx.rangeAttributeName) {
-				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
-			}
-		}
-	}
-
-	return matched, suggestions
 }
 
 func completeFlag(doc prompt.Document, unusedFlags []flag) (matched bool, suggestions []prompt.Suggest) {
@@ -205,6 +188,66 @@ func completeFlag(doc prompt.Document, unusedFlags []flag) (matched bool, sugges
 		sort.Slice(suggestions, func(i, j int) bool {
 			return suggestions[i].Text < suggestions[j].Text
 		})
+	}
+
+	return matched, suggestions
+}
+
+func (c *Completer) completeKeyFirst(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
+	var rgxKeyStart *regexp.Regexp
+	if isExpression {
+		rgxKeyStart = regexp.MustCompile(`.* (-k|--key) "(\s*)([a-zA-Z0-9_]*)$`)
+	} else {
+		rgxKeyStart = regexp.MustCompile(`.* (-k|--key) "(\s*){(\s*)([a-zA-Z0-9_]*)$`)
+	}
+
+	matches := rgxKeyStart.FindStringSubmatch(doc.CurrentLineBeforeCursor())
+	if len(matches) > 0 {
+		matched = true
+
+		keyInput := matches[len(matches)-1]
+		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
+			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
+		}
+		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
+			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
+		}
+	}
+
+	return matched, suggestions
+}
+
+func (c *Completer) completeKeySecond(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
+	var rgxKeyAnd *regexp.Regexp
+	if isExpression {
+		rgxKeyAnd = regexp.MustCompile(`.* (-k|--key) "(.*) AND(\s+)([a-zA-Z0-9_]*)$`)
+	} else {
+		rgxKeyAnd = regexp.MustCompile(`.* (-k|--key) "(\s*){(.*),(\s+)([a-zA-Z0-9_]*)$`)
+	}
+
+	matches := rgxKeyAnd.FindStringSubmatch(doc.CurrentLineBeforeCursor())
+
+	if len(matches) > 0 {
+		matched = true
+
+		var firstCondition string
+		if isExpression {
+			firstCondition = matches[2]
+		} else {
+			firstCondition = matches[3]
+		}
+
+		keyInput := matches[len(matches)-1]
+		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
+			if !strings.Contains(firstCondition, c.tableCtx.hashAttributeName) {
+				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
+			}
+		}
+		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
+			if !strings.Contains(firstCondition, c.tableCtx.rangeAttributeName) {
+				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
+			}
+		}
 	}
 
 	return matched, suggestions

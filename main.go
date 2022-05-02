@@ -72,7 +72,7 @@ func main() {
 			Key: prompt.ControlRight,
 			Fn:  prompt.GoRightWord,
 		}),
-		prompt.OptionCompletionWordSeparator("- \""),
+		prompt.OptionCompletionWordSeparator("{- \""),
 	)
 
 	p.Run()

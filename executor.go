@@ -27,7 +27,7 @@ type readOpts struct {
 	Filter           string `short:"f" long:"filter" description:"Filter expression" required:"false"`
 	Index            string `short:"i" long:"index" description:"Index name" required:"false"`
 	ConsistentRead   bool   `short:"c" long:"consistent-read" description:"Set consistent-read to true" required:"false"`
-	ConsumedCapacity string `short:"r" long:"returned-consumed-capacity" description:"Return consumed capacity" required:"false"`
+	ConsumedCapacity string `short:"r" long:"return-consumed-capacity" description:"Return consumed capacity" required:"false"`
 	Select           string `short:"s" long:"select" description:"Select" required:"false"`
 	Limit            *int64 `short:"l" long:"limit" description:"Maximum items returned, equivalent to --max-items" required:"false"`
 	//TODO
@@ -44,6 +44,14 @@ type scanOpts struct {
 	readOpts
 	TotalSegments *int64 `long:"total-segments" description:"Total segments" required:"false"`
 	Segment       *int64 `long:"segment" description:"Segment" required:"false"`
+}
+
+type deleteOpts struct {
+	Key                         string `short:"k" long:"key" description:"Key expression" required:"true"`
+	ConsumedCapacity            string `short:"r" long:"return-consumed-capacity" description:"Return consumed capacity" required:"false"`
+	ConditionExpression         string `short:"c" long:"condition-expression" description:"Condition expression" required:"false"`
+	ReturnValues                bool   `short:"v" long:"return-values" description:"Return deleted item values" required:"false"`
+	ReturnItemCollectionMetrics bool   `short:"s" long:"return-item-collection-metrics" description:"Return modified collection size" required:"false"`
 }
 
 func (e Executor) Execute(input string) {
@@ -68,8 +76,6 @@ func (e Executor) handleInput(input string) {
 	switch command {
 	case "":
 		return
-	case "use":
-		e.handleUse(args)
 	case "quit":
 		fallthrough
 	case "q":
@@ -77,12 +83,18 @@ func (e Executor) handleInput(input string) {
 	case "exit":
 		fmt.Println("Goodbye")
 		os.Exit(0)
+	case "use":
+		e.handleUse(args)
+	case "desc":
+		e.handleDesc()
 	case "query":
 		e.handleQuery(args)
 	case "scan":
 		e.handleScan(args)
-	case "desc":
-		e.handleDesc()
+	case "delete":
+		e.handleDelete(args)
+	case "update":
+		e.handleUpdate(args)
 	default:
 		fmt.Println("Unknown command: " + command)
 	}
@@ -122,6 +134,21 @@ func (e Executor) handleUse(tableName string) {
 	}
 
 	e.tableCtx.indexNames = indexNames
+}
+
+func (e Executor) handleDesc() {
+	e.validateTableSelected()
+
+	describeInput := dynamodb.DescribeTableInput{
+		TableName: &e.tableCtx.name,
+	}
+
+	describeOutput, err := e.dynamo.DescribeTable(&describeInput)
+	if err != nil {
+		fmt.Println("Error occurred: ", err)
+	} else {
+		fmt.Println(describeOutput)
+	}
 }
 
 func (e Executor) handleQuery(args string) {
@@ -165,14 +192,14 @@ func (e Executor) handleQuery(args string) {
 	}
 
 	if opts.Verbose {
-		fmt.Printf("DEBUG query input: %v\n", queryInput)
+		fmt.Printf("DEBUG input: %v\n", queryInput)
 	}
 
 	queryOutput, err := e.dynamo.Query(&queryInput)
 	if err != nil {
 		if !opts.Verbose {
 			// If debug is off, print whole input anyway
-			fmt.Printf("DEBUG query input: %v\n", queryInput)
+			fmt.Printf("DEBUG input: %v\n", queryInput)
 		}
 		fmt.Println("Error occurred: ", err)
 	} else {
@@ -223,7 +250,7 @@ func (e Executor) handleScan(args string) {
 	}
 
 	if opts.Verbose {
-		fmt.Printf("DEBUG scan input: %v\n", scanInput)
+		fmt.Printf("DEBUG input: %v\n", scanInput)
 	}
 
 	scanOutput, err := e.dynamo.Scan(&scanInput)
@@ -234,19 +261,59 @@ func (e Executor) handleScan(args string) {
 	}
 }
 
-func (e Executor) handleDesc() {
+func (e Executor) handleDelete(args string) {
 	e.validateTableSelected()
 
-	describeInput := dynamodb.DescribeTableInput{
-		TableName: &e.tableCtx.name,
+	deleteOpts := deleteOpts{}
+
+	_, err := flags.ParseArgs(&deleteOpts, parseArgs(args))
+	if err != nil {
+		return
 	}
 
-	describeOutput, err := e.dynamo.DescribeTable(&describeInput)
+	keyMap, _, keyParseErr := tryParseMap(strings.Trim(deleteOpts.Key, " "))
+	if keyParseErr != nil {
+		panic(keyParseErr)
+	}
+
+	deleteItemInput := dynamodb.DeleteItemInput{
+		TableName: &e.tableCtx.name,
+		Key:       keyMap.M,
+	}
+
+	if deleteOpts.ConditionExpression != "" {
+		expr := parseQuery("", deleteOpts.ConditionExpression, "")
+		deleteItemInput.ConditionExpression = expr.filterExpr()
+		deleteItemInput.ExpressionAttributeNames = expr.getNames()
+		deleteItemInput.ExpressionAttributeValues = expr.getValues()
+	}
+
+	if deleteOpts.ConsumedCapacity != "" {
+		deleteItemInput.SetReturnConsumedCapacity(deleteOpts.ConsumedCapacity)
+	}
+
+	if deleteOpts.ReturnValues {
+		deleteItemInput.SetReturnValues("ALL_OLD")
+	}
+
+	if deleteOpts.ReturnItemCollectionMetrics {
+		deleteItemInput.SetReturnItemCollectionMetrics("SIZE")
+	}
+
+	if opts.Verbose {
+		fmt.Printf("DEBUG input: %v\n", deleteItemInput)
+	}
+
+	deleteOutput, err := e.dynamo.DeleteItem(&deleteItemInput)
 	if err != nil {
 		fmt.Println("Error occurred: ", err)
 	} else {
-		fmt.Println(describeOutput)
+		fmt.Println(prettify(deleteOutput))
 	}
+}
+
+func (e Executor) handleUpdate(args string) {
+
 }
 
 func (e Executor) validateTableSelected() {

@@ -222,6 +222,9 @@ func parseValue(expr string) (*dynamodb.AttributeValue, string, error) {
 		value, remainder, err = tryParseList(expr)
 	}
 	if err != nil {
+		value, remainder, err = tryParseMap(expr)
+	}
+	if err != nil {
 		return nil, expr, errors.New("Could not parse value at: " + expr)
 	}
 
@@ -370,6 +373,35 @@ func tryParseList(expr string) (list *dynamodb.AttributeValue, remainder string,
 
 	return set, expr[2:], nil
 
+}
+
+func tryParseMap(expr string) (result *dynamodb.AttributeValue, remainder string, err error) {
+	if strings.HasPrefix(expr, "{") {
+		expr = expr[1:]
+	} else {
+		return nil, expr, errors.New("Could not parse map")
+	}
+
+	expr = strings.TrimLeft(expr, " ")
+
+	root := make(map[string]*dynamodb.AttributeValue)
+	for !strings.HasPrefix(expr, "}") {
+		colonIdx := findWithOffset(expr, ":", 0)
+
+		name := strings.Trim(expr[0:colonIdx], " ")
+		expr = strings.TrimLeft(expr[colonIdx+1:], " ")
+
+		val, remainder, err := parseValue(expr)
+		if err != nil {
+			panic(err)
+		}
+
+		expr = strings.TrimLeft(remainder, " ,")
+		root[name] = val
+	}
+
+	attributeValue := dynamodb.AttributeValue{M: root}
+	return &attributeValue, expr[1:], nil
 }
 
 func parseProjectionExpression(expr string, params paramsImpl) *string {

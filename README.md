@@ -34,3 +34,4 @@ The way values are handled is based on DynamoDB's [PartiQL support](https://docs
 * `Number Set` <<1, 2.5, 3>>
 * `String Set` <<'first', 'second', 'third'>>
 * `List`       [123, 'string']
+* `Map`        { key1: 'value1', key2: 123 }
