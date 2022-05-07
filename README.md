@@ -24,7 +24,7 @@ Binaries can be found on [Github releases](https://github.com/skborissov/dynshel
 ### Expression syntax
 Expressions syntax is simplified in how attribute names and values are provided, but is otherwise unchanged.
 #### Names
-Names are written literally. A rare exception to this are special names (a small subset of the DynamoDB [reserved names](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ReservedWords.html), which should be quoted with backticks (\`).
+Names are written literally. Exceptions to this are special names (a small subset of the DynamoDB [reserved names](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ReservedWords.html) and names with spaces, which should be quoted with backticks (\`).
 #### Values
 The way values are handled is based on DynamoDB's [PartiQL support](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ql-reference.data-types.html). Examples for each supported type are listed below.
 * `Boolean`    true

@@ -14,7 +14,8 @@ var specials []string = []string{" ", ",", "(", ")", "]", ">>"}
 var comparators []string = []string{"=", ">", "<", ">=", "<=", "<>"}
 var keywords []string = append(append(specials, comparators...),
 	"and", "or", "not", "in", "between",
-	"begins_with", "attribute_exists", "attribute_not_exists", "attribute_type", "contains", "size",
+	"set", "remove", "add", "delete", "+", "-",
+	"begins_with", "attribute_exists", "attribute_not_exists", "attribute_type", "contains", "size", "list_append", "if_not_exists",
 )
 
 type params interface {
@@ -147,32 +148,32 @@ func parseGenericExpression(expr string, params paramsImpl) (resultExpr *string)
 // When they're indexed, the index should be included raw (i.e. not in the placeholder value)
 // e.g. a.b[1].c needs to become #1.#2[1].#3
 func parseName(expr string, params paramsImpl) (resultName string, remainder string) {
+	isEscaped := false
 	if strings.HasPrefix(expr, "`") {
-		closingIdx := findWithOffset(expr, "`", 1)
-		if closingIdx == -1 {
-			panic("Unterminated name")
-		}
-
-		// untilde
-		expr = strings.Join([]string{expr[1:closingIdx], expr[closingIdx+1:]}, "")
+		isEscaped = true
+		expr = expr[1:]
 	}
 
-	parsedName, remainder := parseNextToken(expr, ".", "[")
+	var parsedName string
+	if isEscaped { // if escape just read until closing tilde
+		indexEnd := strings.Index(expr, "`")
+		parsedName = expr[:indexEnd]
+		remainder = expr[indexEnd+1:]
+	} else {
+		parsedName, remainder = parseNextToken(expr, ".", "[")
+	}
+
 	resultName = params.addName(parsedName)
 
-	for len(remainder) > 0 {
-		if remainder[0] == '[' {
-			closingIdx := findWithOffset(remainder, "]", 1)
-			resultName = resultName + remainder[:closingIdx+1]
-			remainder = remainder[closingIdx+1:]
-		}
+	if len(remainder) > 0 && remainder[0] == '[' {
+		closingIdx := findWithOffset(remainder, "]", 1)
+		resultName = resultName + remainder[:closingIdx+1]
+		remainder = remainder[closingIdx+1:]
+	}
 
-		if len(remainder) > 0 && remainder[0] == '.' {
-			parsedName, remainder = parseNextToken(remainder[1:], ".", "[")
-			resultName = resultName + "." + params.addName(parsedName)
-		} else {
-			break
-		}
+	if len(remainder) > 0 && remainder[0] == '.' {
+		parsedName, remainder = parseName(remainder[1:], params)
+		resultName = resultName + "." + parsedName
 	}
 
 	return resultName, remainder

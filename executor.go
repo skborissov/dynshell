@@ -46,12 +46,21 @@ type scanOpts struct {
 	Segment       *int64 `long:"segment" description:"Segment" required:"false"`
 }
 
-type deleteOpts struct {
+type writeOpts struct {
 	Key                         string `short:"k" long:"key" description:"Key expression" required:"true"`
 	ConsumedCapacity            string `short:"r" long:"return-consumed-capacity" description:"Return consumed capacity" required:"false"`
 	ConditionExpression         string `short:"c" long:"condition-expression" description:"Condition expression" required:"false"`
 	ReturnValues                bool   `short:"v" long:"return-values" description:"Return deleted item values" required:"false"`
 	ReturnItemCollectionMetrics bool   `short:"s" long:"return-item-collection-metrics" description:"Return modified collection size" required:"false"`
+}
+
+type deleteOpts struct {
+	writeOpts
+}
+
+type updateOpts struct {
+	writeOpts
+	Update string `short:"u" long:"update" description:"Update expression" required:"true"`
 }
 
 func (e Executor) Execute(input string) {
@@ -313,6 +322,53 @@ func (e Executor) handleDelete(args string) {
 }
 
 func (e Executor) handleUpdate(args string) {
+	e.validateTableSelected()
+
+	updateOpts := updateOpts{}
+
+	_, err := flags.ParseArgs(&updateOpts, parseArgs(args))
+	if err != nil {
+		return
+	}
+
+	keyMap, _, keyParseErr := tryParseMap(strings.Trim(updateOpts.Key, " "))
+	if keyParseErr != nil {
+		panic(keyParseErr)
+	}
+
+	expr := parseQuery(updateOpts.Update, updateOpts.ConditionExpression, "")
+
+	updateItemInput := dynamodb.UpdateItemInput{
+		TableName:                 &e.tableCtx.name,
+		Key:                       keyMap.M,
+		UpdateExpression:          expr.keyExpr(),
+		ConditionExpression:       expr.filterExpr(),
+		ExpressionAttributeNames:  expr.getNames(),
+		ExpressionAttributeValues: expr.getValues(),
+	}
+
+	if updateOpts.ConsumedCapacity != "" {
+		updateItemInput.SetReturnConsumedCapacity(updateOpts.ConsumedCapacity)
+	}
+
+	if updateOpts.ReturnValues {
+		updateItemInput.SetReturnValues("ALL_OLD")
+	}
+
+	if updateOpts.ReturnItemCollectionMetrics {
+		updateItemInput.SetReturnItemCollectionMetrics("SIZE")
+	}
+
+	if opts.Verbose {
+		fmt.Printf("DEBUG input: %v\n", updateItemInput)
+	}
+
+	updateOutput, err := e.dynamo.UpdateItem(&updateItemInput)
+	if err != nil {
+		fmt.Println("Error occurred: ", err)
+	} else {
+		fmt.Println(prettify(updateOutput))
+	}
 
 }
 

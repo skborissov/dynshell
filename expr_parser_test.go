@@ -506,14 +506,14 @@ func Test_types_stringEscaping(t *testing.T) {
 func Test_names_nameEscaping(t *testing.T) {
 	escapedKeyword := parseQuery("`size` = 123", "", "")
 	escapedNumber := parseQuery("`123` = 'abcd'", "", "")
-	escapedComplexName := parseQuery("`a.b[3].c.d[2]` = 'abcd'", "", "")
+	escapedComplexName := parseQuery("`a`.b[3].`c d`.`e`[2] = 'abcd'", "", "")
 
 	require.Equal(t, "size", *escapedKeyword.getNames()["#0"])
 	require.Equal(t, "123", *escapedNumber.getNames()["#0"])
 
 	require.Equal(t, "a", *escapedComplexName.getNames()["#0"])
 	require.Equal(t, "b", *escapedComplexName.getNames()["#1"])
-	require.Equal(t, "c", *escapedComplexName.getNames()["#2"])
-	require.Equal(t, "d", *escapedComplexName.getNames()["#3"])
+	require.Equal(t, "c d", *escapedComplexName.getNames()["#2"])
+	require.Equal(t, "e", *escapedComplexName.getNames()["#3"])
 	require.Equal(t, "#0.#1[3].#2.#3[2] = :0", *escapedComplexName.keyExpr())
 }

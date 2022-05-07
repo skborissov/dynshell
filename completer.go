@@ -39,6 +39,8 @@ func (c *Completer) Complete(doc prompt.Document) []prompt.Suggest {
 		return c.completeScan(doc)
 	case "delete":
 		return c.completeDelete(doc)
+	case "update":
+		return c.completeUpdate(doc)
 	default:
 		return []prompt.Suggest{}
 	}
@@ -131,6 +133,19 @@ func (c *Completer) completeRead(doc prompt.Document, unusedFlags []flag) (sugge
 }
 
 func (c *Completer) completeDelete(doc prompt.Document) (suggestions []prompt.Suggest) {
+	unusedFlags := getUnusedFlags(doc, &writeOpts{})
+
+	return c.completeWrite(doc, unusedFlags)
+}
+
+func (c *Completer) completeUpdate(doc prompt.Document) (suggestions []prompt.Suggest) {
+	unusedFlags := getUnusedFlags(doc, &writeOpts{})
+	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &updateOpts{})...)
+
+	return c.completeWrite(doc, unusedFlags)
+}
+
+func (c *Completer) completeWrite(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
 	matched, suggestions := c.completeKeyFirst(doc, false)
 	if matched {
 		return suggestions
@@ -141,11 +156,11 @@ func (c *Completer) completeDelete(doc prompt.Document) (suggestions []prompt.Su
 		return suggestions
 	}
 
-	deleteFlags := getCmdFlags(&deleteOpts{})
+	writeFlags := getCmdFlags(&writeOpts{})
 	enumFlags := map[flag][]string{
-		findFlagByShort(deleteFlags, "r"): {"INDEXES", "TOTAL", "NONE"}}
+		findFlagByShort(writeFlags, "r"): {"INDEXES", "TOTAL", "NONE"}}
 
-	return c.completeFlags(doc, getUnusedFlags(doc, &deleteOpts{}), enumFlags)
+	return c.completeFlags(doc, unusedFlags, enumFlags)
 }
 
 func (c *Completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumFlags map[flag][]string) (suggestions []prompt.Suggest) {
