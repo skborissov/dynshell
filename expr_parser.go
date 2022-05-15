@@ -10,110 +10,73 @@ import (
 )
 
 // Don't include "<<", "[" in specials, as we want them left intact for set/list parsing
-var specials []string = []string{" ", ",", "(", ")", "]", ">>"}
-var comparators []string = []string{"=", ">", "<", ">=", "<=", "<>"}
-var keywords []string = append(append(specials, comparators...),
+var specials []string = []string{" ", ",", "(", ")", "]", ">>", "=", ">", "<", ">=", "<=", "<>"}
+var keywords []string = append(specials,
 	"and", "or", "not", "in", "between",
 	"set", "remove", "add", "delete", "+", "-",
 	"begins_with", "attribute_exists", "attribute_not_exists", "attribute_type", "contains", "size", "list_append", "if_not_exists",
 )
 
-type params interface {
-	keyExpr() *string
-	filterExpr() *string
-	projExpr() *string
+type exprParser interface {
+	parseGenericExpression(expr string) *string
+	parseProjectionExpression(expr string) *string
 	getNames() map[string]*string
 	getValues() map[string]*dynamodb.AttributeValue
 }
 
-type paramsImpl struct {
+type exprParserImpl struct {
 	nameIdx, valueIdx *int
 	key, filter, proj *string
 	names             map[string]*string
 	values            map[string]*dynamodb.AttributeValue
 }
 
-func (q paramsImpl) keyExpr() *string {
-	if q.key != nil && "" == strings.Trim(*q.key, " ") {
-		return nil
-	}
+func newExprParser() exprParser {
+	namesIdx, valueIdx := 0, 0
 
-	return q.key
-}
-
-func (q paramsImpl) filterExpr() *string {
-	if q.filter != nil && "" == strings.Trim(*q.filter, " ") {
-		return nil
-	}
-
-	return q.filter
-}
-
-func (q paramsImpl) projExpr() *string {
-	if q.proj != nil && "" == strings.Trim(*q.proj, " ") {
-		return nil
-	}
-
-	return q.proj
-}
-
-func (q paramsImpl) getNames() map[string]*string {
-	if q.names == nil || len(q.names) == 0 {
-		return nil
-	}
-
-	return q.names
-}
-
-func (q paramsImpl) getValues() map[string]*dynamodb.AttributeValue {
-	if q.values == nil || len(q.values) == 0 {
-		return nil
-	}
-
-	return q.values
-}
-
-func (q paramsImpl) addName(name string) string {
-	placeholder := "#" + strconv.Itoa(*q.nameIdx)
-	q.names[placeholder] = &name
-	*q.nameIdx++
-
-	return placeholder
-}
-
-func (q paramsImpl) addValue(value *dynamodb.AttributeValue) string {
-	placeholder := ":" + strconv.Itoa(*q.valueIdx)
-	q.values[placeholder] = value
-	*q.valueIdx++
-
-	return placeholder
-}
-
-func parseQuery(keyInput string, filterInput string, projInput string) params {
-	namesIdx := 0
-	valueIdx := 0
-
-	params := paramsImpl{
+	return exprParserImpl{
 		nameIdx:  &namesIdx,
 		valueIdx: &valueIdx,
-		key:      nil,
-		filter:   nil,
-		proj:     nil,
 		names:    make(map[string]*string),
 		values:   make(map[string]*dynamodb.AttributeValue),
 	}
-
-	params.key = parseGenericExpression(keyInput, params)
-	params.filter = parseGenericExpression(filterInput, params)
-	params.proj = parseProjectionExpression(projInput, params)
-
-	return params
 }
 
-// parses key and filter expressions
-// updates params' names and values
-// TODO maybe this can parse update and condition expressions as well?
-func parseGenericExpression(expr string, params paramsImpl) (resultExpr *string) {
+func (p exprParserImpl) getNames() map[string]*string {
+	if p.names == nil || len(p.names) == 0 {
+		return nil
+	}
+
+	return p.names
+}
+
+func (p exprParserImpl) getValues() map[string]*dynamodb.AttributeValue {
+	if p.values == nil || len(p.values) == 0 {
+		return nil
+	}
+
+	return p.values
+}
+
+func (p exprParserImpl) addName(name string) string {
+	placeholder := "#" + strconv.Itoa(*p.nameIdx)
+	p.names[placeholder] = &name
+	*p.nameIdx++
+
+	return placeholder
+}
+
+func (p exprParserImpl) addValue(value *dynamodb.AttributeValue) string {
+	placeholder := ":" + strconv.Itoa(*p.valueIdx)
+	p.values[placeholder] = value
+	*p.valueIdx++
+
+	return placeholder
+}
+
+// parses key, update, filter/condition expressions
+// updates parser's names and values
+func (p exprParserImpl) parseGenericExpression(expr string) (resultExpr *string) {
 	resultExpr = new(string)
 
 	for len(expr) > 0 {
@@ -127,27 +90,55 @@ func parseGenericExpression(expr string, params paramsImpl) (resultExpr *string)
 		}
 
 		// Try to parse value
-		value, remainder, err := parseValue(expr)
-		if err == nil {
-			withValue := *resultExpr + params.addValue(value)
+		value, remainder, _ := tryParseValue(expr)
+		if value != nil {
+			withValue := *resultExpr + p.addValue(value)
 			*resultExpr = withValue
 			expr = remainder
 			continue
 		}
 
-		resultName, remainder := parseName(expr, params)
+		// Default to name
+		resultName, remainder := p.parseName(expr)
 		withName := *resultExpr + resultName
 		*resultExpr = withName
 		expr = remainder
 	}
 
-	return resultExpr
+	if len(*resultExpr) > 0 {
+		return resultExpr
+	} else {
+		return nil
+	}
+}
+
+func (p exprParserImpl) parseProjectionExpression(expr string) *string {
+	expr = strings.Trim(expr, " ")
+
+	placeholderExpr := ""
+
+	for len(expr) > 0 {
+		name, remainder := p.parseName(expr)
+		expr = remainder
+		placeholderExpr = placeholderExpr + name
+
+		if len(expr) > 0 {
+			expr = strings.TrimLeft(expr[1:], " ")
+			placeholderExpr = placeholderExpr + ","
+		}
+	}
+
+	if len(placeholderExpr) > 0 {
+		return &placeholderExpr
+	} else {
+		return nil
+	}
 }
 
 // When names are nested, they need to be placeholdered separately
 // When they're indexed, the index should be included raw (i.e. not in the placeholder value)
 // e.g. a.b[1].c needs to become #1.#2[1].#3
-func parseName(expr string, params paramsImpl) (resultName string, remainder string) {
+func (p exprParserImpl) parseName(expr string) (resultName string, remainder string) {
 	isEscaped := false
 	if strings.HasPrefix(expr, "`") {
 		isEscaped = true
@@ -155,7 +146,7 @@ func parseName(expr string, params paramsImpl) (resultName string, remainder str
 	}
 
 	var parsedName string
-	if isEscaped { // if escape just read until closing tilde
+	if isEscaped { // if escaped, just read until closing tilde
 		indexEnd := strings.Index(expr, "`")
 		parsedName = expr[:indexEnd]
 		remainder = expr[indexEnd+1:]
@@ -163,7 +154,7 @@ func parseName(expr string, params paramsImpl) (resultName string, remainder str
 		parsedName, remainder = parseNextToken(expr, ".", "[")
 	}
 
-	resultName = params.addName(parsedName)
+	resultName = p.addName(parsedName)
 
 	if len(remainder) > 0 && remainder[0] == '[' {
 		closingIdx := findWithOffset(remainder, "]", 1)
@@ -172,7 +163,7 @@ func parseName(expr string, params paramsImpl) (resultName string, remainder str
 	}
 
 	if len(remainder) > 0 && remainder[0] == '.' {
-		parsedName, remainder = parseName(remainder[1:], params)
+		parsedName, remainder = p.parseName(remainder[1:])
 		resultName = resultName + "." + parsedName
 	}
 
@@ -180,11 +171,11 @@ func parseName(expr string, params paramsImpl) (resultName string, remainder str
 }
 
 // returns the next token, as terminated by either a special or the end of the string
-// the returned remainder starts with the termination character
+// the returned remainder starts with the termination string
 func parseNextToken(expr string, additionalDelimiters ...string) (attributeName string, remainder string) {
 	delimiterIndexes := []int{len(expr)}
 
-	for _, s := range append(append(append(specials, comparators...)), additionalDelimiters...) {
+	for _, s := range append(specials, additionalDelimiters...) {
 		idx := strings.Index(expr, string(s))
 		if idx != -1 {
 			delimiterIndexes = append(delimiterIndexes, idx)
@@ -205,7 +196,24 @@ func parseNextToken(expr string, additionalDelimiters ...string) (attributeName 
 	return attributeName, expr
 }
 
-func parseValue(expr string) (*dynamodb.AttributeValue, string, error) {
+func tryParseValue(expr string) (*dynamodb.AttributeValue, string, error) {
+	var value *dynamodb.AttributeValue
+
+	value, remainder, err := tryParseSimpleValue(expr)
+	if err != nil {
+		value, remainder, err = tryParseList(expr)
+	}
+	if err != nil {
+		value, remainder, err = tryParseMap(expr)
+	}
+	if err != nil {
+		return nil, expr, errors.New("Could not parse value at: " + expr)
+	}
+
+	return value, remainder, nil
+}
+
+func tryParseSimpleValue(expr string) (*dynamodb.AttributeValue, string, error) {
 	var value interface{}
 
 	value, remainder, err := tryParseString(expr)
@@ -220,23 +228,10 @@ func parseValue(expr string) (*dynamodb.AttributeValue, string, error) {
 		value = nil
 	}
 	if err != nil {
-		value, remainder, err = tryParseList(expr)
-	}
-	if err != nil {
-		value, remainder, err = tryParseMap(expr)
-	}
-	if err != nil {
-		return nil, expr, errors.New("Could not parse value at: " + expr)
+		return nil, expr, err
 	}
 
-	// lists and sets are a special case that return a *dynamodb.AttributeValue
-	// that is already marshalled
-	attributeValue, isAttributeValue := value.(*dynamodb.AttributeValue)
-	if isAttributeValue {
-		return attributeValue, remainder, nil
-	}
-
-	attributeValue, err = dynamodbattribute.Marshal(value)
+	attributeValue, err := dynamodbattribute.Marshal(value)
 	if err != nil {
 		panic(err)
 	}
@@ -253,7 +248,7 @@ func tryParseString(expr string) (parsedStr string, remainder string, err error)
 
 	idxQuote := strings.Index(expr, "'")
 	if idxQuote == 0 {
-		panic("Unterminated string")
+		panic("Unterminated string: " + expr)
 	}
 
 	idxEscape := strings.Index(expr, "\\")
@@ -264,7 +259,7 @@ func tryParseString(expr string) (parsedStr string, remainder string, err error)
 			idxQuote = findWithOffset(expr, "'", idxEscape+1)
 			idxEscape = findWithOffset(expr, "\\", idxEscape+1)
 		} else {
-			panic("Unexpected escape character")
+			panic("Unexpected escape character: " + expr)
 		}
 	}
 
@@ -294,7 +289,7 @@ func tryParseNumber(expr string) (parsedNum interface{}, remainder string, err e
 		return parsedNum, remainder, nil
 	}
 
-	return nil, expr, errors.New("Could not parse number")
+	return nil, expr, errors.New("Expected number value at: " + expr)
 }
 
 func tryParseInt(expr string) (parsedInt int, remainder string, err error) {
@@ -320,7 +315,7 @@ func tryParseBoolean(expr string) (result bool, remainder string, err error) {
 		return false, expr, nil
 	}
 
-	return false, expr, errors.New("Could not parse bool")
+	return false, expr, errors.New("Expected bool value at: " + expr)
 }
 
 func tryParseNull(expr string) (remainder string, err error) {
@@ -329,7 +324,7 @@ func tryParseNull(expr string) (remainder string, err error) {
 		return expr, nil
 	}
 
-	return expr, errors.New("Could not parse null")
+	return expr, errors.New("Expected null value at: " + expr)
 }
 
 func tryParseList(expr string) (list *dynamodb.AttributeValue, remainder string, err error) {
@@ -338,14 +333,14 @@ func tryParseList(expr string) (list *dynamodb.AttributeValue, remainder string,
 	} else if strings.HasPrefix(expr, "<<") {
 		expr = expr[2:]
 	} else {
-		return nil, expr, errors.New("Could not parse list")
+		return nil, expr, errors.New("Expected list value at: " + expr)
 	}
 
 	expr = strings.TrimLeft(expr, " ,")
 
 	items := []*dynamodb.AttributeValue{}
 	for !strings.HasPrefix(expr, "]") && !strings.HasPrefix(expr, ">>") {
-		val, remainder, err := parseValue(expr)
+		val, remainder, err := tryParseValue(expr)
 
 		if err != nil {
 			panic(err)
@@ -380,7 +375,7 @@ func tryParseMap(expr string) (result *dynamodb.AttributeValue, remainder string
 	if strings.HasPrefix(expr, "{") {
 		expr = expr[1:]
 	} else {
-		return nil, expr, errors.New("Could not parse map")
+		return nil, expr, errors.New("Expected map value at: " + expr)
 	}
 
 	expr = strings.TrimLeft(expr, " ")
@@ -392,7 +387,7 @@ func tryParseMap(expr string) (result *dynamodb.AttributeValue, remainder string
 		name := strings.Trim(expr[0:colonIdx], " ")
 		expr = strings.TrimLeft(expr[colonIdx+1:], " ")
 
-		val, remainder, err := parseValue(expr)
+		val, remainder, err := tryParseValue(expr)
 		if err != nil {
 			panic(err)
 		}
@@ -403,25 +398,6 @@ func tryParseMap(expr string) (result *dynamodb.AttributeValue, remainder string
 
 	attributeValue := dynamodb.AttributeValue{M: root}
 	return &attributeValue, expr[1:], nil
-}
-
-func parseProjectionExpression(expr string, params paramsImpl) *string {
-	expr = strings.Trim(expr, " ")
-
-	placeholderExpr := ""
-
-	for len(expr) > 0 {
-		name, remainder := parseName(expr, params)
-		expr = remainder
-		placeholderExpr = placeholderExpr + name
-
-		if len(expr) > 0 {
-			expr = strings.TrimLeft(expr[1:], " ")
-			placeholderExpr = placeholderExpr + ","
-		}
-	}
-
-	return &placeholderExpr
 }
 
 func startsWithKeyword(str string) *string {

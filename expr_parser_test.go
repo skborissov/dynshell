@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -11,132 +12,130 @@ func Test_query_keyOnly(t *testing.T) {
 	// given
 	expectedKeyCondition := "#0 = :0 AND #1>=:1"
 
-	expectedName0 := "pk"
-	expectedName1 := "sk"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1}
+	expectedNames := map[string]*string{
+		"#0": name("pk"),
+		"#1": name("sk"),
+	}
 
-	expectedValueStr := "someStr"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValueStr}
-	expectedValueNumber := "123"
-	expectedValue1 := dynamodb.AttributeValue{N: &expectedValueNumber}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+		":1": integer(123),
+	}
 
 	// when
-	var expr params = parseQuery("pk = 'someStr' AND sk>=123", "", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("pk = 'someStr' AND sk>=123")
 
 	// then
-	require.Equal(t, expectedKeyCondition, *expr.keyExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.filterExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedKeyCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_complexNames(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0.#1=:0 AND #2.#3[2] > :1 OR :2 = #4.#5[2].#6"
 
-	expectedName0 := "a"
-	expectedName1 := "b"
-	expectedName2 := "c"
-	expectedName3 := "d"
-	expectedName4 := "e"
-	expectedName5 := "f"
-	expectedName6 := "g"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2, "#3": &expectedName3, "#4": &expectedName4, "#5": &expectedName5, "#6": &expectedName6}
+	expectedNames := map[string]*string{
+		"#0": name("a"),
+		"#1": name("b"),
+		"#2": name("c"),
+		"#3": name("d"),
+		"#4": name("e"),
+		"#5": name("f"),
+		"#6": name("g"),
+	}
 
-	expectedValue0Number := "1"
-	expectedValue0 := dynamodb.AttributeValue{N: &expectedValue0Number}
-	expectedValue1Number := "2"
-	expectedValue1 := dynamodb.AttributeValue{N: &expectedValue1Number}
-	expectedValue2Number := "3"
-	expectedValue2 := dynamodb.AttributeValue{N: &expectedValue2Number}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": integer(1),
+		":1": integer(2),
+		":2": integer(3),
+	}
 
 	// when
-	// TODO add case where complex name is last
-	var expr params = parseQuery("", "a.b=1 AND c.d[2] > 2 OR 3 = e.f[2].g", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("a.b=1 AND c.d[2] > 2 OR 3 = e.f[2].g")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_keyAndProj(t *testing.T) {
 	// given
 	expectedKeyCondition := "#0 = :0"
 
-	expectedName0 := "pk"
-	expectedName1 := "pk"
-	expectedName2 := "field0"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2}
+	expectedNames := map[string]*string{
+		"#0": name("pk"),
+		"#1": name("pk"),
+		"#2": name("field0"),
+	}
 
-	expectedValueStr := "someStr"
-	expectedValue := dynamodb.AttributeValue{S: &expectedValueStr}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+	}
 
 	expectedProj := "#1,#2"
 
 	// when
-	var expr params = parseQuery("pk = 'someStr'", "", "pk, field0")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("pk = 'someStr'")
+	proj := exprParser.parseProjectionExpression("pk, field0")
 
 	// then
-	require.Equal(t, expectedKeyCondition, *expr.keyExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Equal(t, expectedProj, *expr.projExpr())
-	require.Nil(t, expr.filterExpr())
+	require.Equal(t, expectedKeyCondition, *expr)
+	require.Equal(t, expectedProj, *proj)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_filterOnly(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0"
 
-	expectedName := "field0"
-	expectedNames := map[string]*string{"#0": &expectedName}
+	expectedNames := map[string]*string{"#0": name("field0")}
 
-	expectedValueStr := "someStr"
-	expectedValue := dynamodb.AttributeValue{S: &expectedValueStr}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+	}
 
 	// when
-	var expr params = parseQuery("", "field0 = 'someStr'", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 = 'someStr'")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_filterAndProj(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0"
 
-	expectedName1 := "field1"
-	expectedName2 := "field2"
-	expectedName3 := "field3"
-	expectedNames := map[string]*string{"#0": &expectedName1, "#1": &expectedName2, "#2": &expectedName3}
+	expectedNames := map[string]*string{
+		"#0": name("field1"),
+		"#1": name("field2"),
+		"#2": name("field3"),
+	}
 
-	expectedValueStr := "someStr"
-	expectedValue := dynamodb.AttributeValue{S: &expectedValueStr}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+	}
 
 	expectedProj := "#1,#2"
 
 	// when
-	var expr params = parseQuery("", "field1 = 'someStr'", "field2,field3")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field1 = 'someStr'")
+	proj := exprParser.parseProjectionExpression("field2,field3")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Equal(t, *expr.projExpr(), expectedProj)
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedProj, *proj)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_keyAndFilterAndProj(t *testing.T) {
@@ -144,91 +143,84 @@ func Test_query_keyAndFilterAndProj(t *testing.T) {
 	expectedKeyCondition := "#0 = :0"
 	expectedFilterCondition := "#1 = :1 AND #2 = :2"
 
-	expectedName0 := "pk"
-	expectedName1 := "field0"
-	expectedName2 := "field1"
-	expectedName3 := "pk"
-	expectedName4 := "aValue"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2, "#3": &expectedName3, "#4": &expectedName4}
+	expectedNames := map[string]*string{
+		"#0": name("pk"),
+		"#1": name("field0"),
+		"#2": name("field1"),
+		"#3": name("pk"),
+		"#4": name("aValue"),
+	}
 
-	expectedValue0Str := "someStr"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValue0Str}
-	expectedValue1Str := "aValue"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValue1Str}
-	expectedValue2Str := "anotherValue"
-	expectedValue2 := dynamodb.AttributeValue{S: &expectedValue2Str}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+		":1": str("aValue"),
+		":2": str("anotherValue"),
+	}
 
 	expectedProj := "#3,#4"
 
 	// when
-	var expr params = parseQuery("pk = 'someStr'", "field0 = 'aValue' AND field1 = 'anotherValue'", "pk,aValue")
+	exprParser := newExprParser()
+	key := exprParser.parseGenericExpression("pk = 'someStr'")
+	filter := exprParser.parseGenericExpression("field0 = 'aValue' AND field1 = 'anotherValue'")
+	proj := exprParser.parseProjectionExpression("pk,aValue")
 
 	// then
-	require.Equal(t, expectedKeyCondition, *expr.keyExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedProj, *expr.projExpr())
+	require.Equal(t, expectedKeyCondition, *key)
+	require.Equal(t, expectedFilterCondition, *filter)
+	require.Equal(t, expectedProj, *proj)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_types(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0 AND #1 = :1 AND #2 = :2 AND #3 = :3"
 
-	expectedName0 := "field0"
-	expectedName1 := "field1"
-	expectedName2 := "field2"
-	expectedName3 := "field3"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2, "#3": &expectedName3}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+		"#1": name("field1"),
+		"#2": name("field2"),
+		"#3": name("field3"),
+	}
 
-	expectedValueStr := "someStr"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValueStr}
-	expectedValueInt := "10"
-	expectedValue1 := dynamodb.AttributeValue{N: &expectedValueInt}
-	expectedValueFloat := "10.12345"
-	expectedValue2 := dynamodb.AttributeValue{N: &expectedValueFloat}
-	expectedValueBool := true
-	expectedValue3 := dynamodb.AttributeValue{BOOL: &expectedValueBool}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2, ":3": &expectedValue3}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr"),
+		":1": integer(10),
+		":2": float(10.12345),
+		":3": boolean(true),
+	}
 
 	// when
-	var expr params = parseQuery("", "field0 = 'someStr' AND field1 = 10 AND field2 = 10.12345 AND field3 = true", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 = 'someStr' AND field1 = 10 AND field2 = 10.12345 AND field3 = true")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_list(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0"
 
-	expectedName0 := "field0"
-	expectedNames := map[string]*string{"#0": &expectedName0}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+	}
 
-	expectedValueStr := "someStr"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValueStr}
-
-	expectedValueInt := "10"
-	expectedValue2 := dynamodb.AttributeValue{N: &expectedValueInt}
-
-	expectedValue := dynamodb.AttributeValue{L: []*dynamodb.AttributeValue{&expectedValue1, &expectedValue2}}
+	expectedValue := dynamodb.AttributeValue{L: []*dynamodb.AttributeValue{str("someStr"), integer(10)}}
 
 	// when
-	var expr params = parseQuery("", "field0 = ['someStr', 10]", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 = ['someStr', 10]")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
 
-	require.Equal(t, 1, len(expr.getValues()))
-	require.Equal(t, expectedValue, *expr.getValues()[":0"])
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, 1, len(exprParser.getValues()))
+	require.Equal(t, expectedValue, *exprParser.getValues()[":0"])
 
 }
 
@@ -236,284 +228,320 @@ func Test_query_sets(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0 AND #1 = :1"
 
-	expectedName0 := "field0"
-	expectedName1 := "field1"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+		"#1": name("field1"),
+	}
 
-	expectedValueStr0 := "someStr0"
-	expectedValueStr1 := "someStr1"
-	expectedValueNum0 := "123"
-	expectedValueNum1 := "456.789"
-
-	expectedStringSet := dynamodb.AttributeValue{SS: []*string{&expectedValueStr0, &expectedValueStr1}}
-	expectedNumberSet := dynamodb.AttributeValue{NS: []*string{&expectedValueNum0, &expectedValueNum1}}
+	expectedStringSet := stringSet([]string{"someStr0", "someStr1"})
+	expectedNumberSet := numberSet([]string{"123", "456.789"})
 
 	// when
-	var expr params = parseQuery("", "field0 = <<'someStr0','someStr1'>> AND field1 = << 123 , 456.789  >>", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 = <<'someStr0','someStr1'>> AND field1 = << 123 , 456.789  >>")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
 
-	require.Equal(t, 2, len(expr.getValues()))
-	require.Equal(t, expectedStringSet, *expr.getValues()[":0"])
-	require.Equal(t, expectedNumberSet, *expr.getValues()[":1"])
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, 2, len(exprParser.getValues()))
+	require.Equal(t, *expectedStringSet, *exprParser.getValues()[":0"])
+	require.Equal(t, *expectedNumberSet, *exprParser.getValues()[":1"])
 }
 
 func Test_query_map(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 = :0"
 
-	expectedName0 := "field0"
-	expectedNames := map[string]*string{"#0": &expectedName0}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+	}
 
-	expectedValueStr0 := "mapValue0"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValueStr0}
-	expectedValueNum0 := "123"
-	expectedValue1 := dynamodb.AttributeValue{N: &expectedValueNum0}
-
-	expectedMap := dynamodb.AttributeValue{M: map[string]*dynamodb.AttributeValue{"mapField0": &expectedValue0, "mapField1": &expectedValue1}}
+	expectedMap := dynamodb.AttributeValue{
+		M: map[string]*dynamodb.AttributeValue{
+			"mapField0": str("mapValue0"),
+			"mapField1": integer(123),
+		},
+	}
 
 	// when
-	var expr params = parseQuery("", "field0 = { mapField0: 'mapValue0', mapField1: 123 }", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 = { mapField0: 'mapValue0', mapField1: 123 }")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
 
-	require.Equal(t, 1, len(expr.getValues()))
-	require.Equal(t, expectedMap, *expr.getValues()[":0"])
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, 1, len(exprParser.getValues()))
+	require.Equal(t, expectedMap, *exprParser.getValues()[":0"])
 }
 
 func Test_query_specialTokens(t *testing.T) {
 	// given
 	expectedKeyCondition := "((#0 = :0) AND NOT (#1 = :1))"
-	expectedKey0 := "pk"
-	expectedKey1 := "sk"
 	expectedFilterCondition := "NOT #2 > :2 OR #3 < :3"
-	expectedField0 := "field0"
-	expectedField1 := "field1"
-	expectedNames := map[string]*string{"#0": &expectedKey0, "#1": &expectedKey1, "#2": &expectedField0, "#3": &expectedField1}
-	expectedValueStr0 := "1000"
-	expectedValue0 := dynamodb.AttributeValue{N: &expectedValueStr0}
-	expectedValueStr1 := "123.222"
-	expectedValue1 := dynamodb.AttributeValue{N: &expectedValueStr1}
-	expectedValueStr2 := "str1"
-	expectedValue2 := dynamodb.AttributeValue{S: &expectedValueStr2}
-	expectedValueStr3 := "15"
-	expectedValue3 := dynamodb.AttributeValue{N: &expectedValueStr3}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2, ":3": &expectedValue3}
+
+	expectedNames := map[string]*string{
+		"#0": name("pk"),
+		"#1": name("sk"),
+		"#2": name("field0"),
+		"#3": name("field1"),
+	}
+
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": integer(1000),
+		":1": float(123.222),
+		":2": str("str1"),
+		":3": integer(15),
+	}
 
 	// when
-	var expr params = parseQuery("((pk = 1000) AND NOT (sk = 123.222))", "NOT field0 > 'str1' OR field1 < 15", "")
+	exprParser := newExprParser()
+	key := exprParser.parseGenericExpression("((pk = 1000) AND NOT (sk = 123.222))")
+	filter := exprParser.parseGenericExpression("NOT field0 > 'str1' OR field1 < 15")
 
 	// then
-	require.Equal(t, expectedKeyCondition, *expr.keyExpr())
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedKeyCondition, *key)
+	require.Equal(t, expectedFilterCondition, *filter)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_comparators(t *testing.T) {
 	// given
 	expectedKeyCondition := "#0 = :0"
-	expectedKey0 := "pk"
 	expectedFilterCondition := "#1 > :1 OR #2 < :2 OR #3 >= :3 OR #4 <= :4 OR #5 <> :5"
-	expectedField0 := "field0"
-	expectedField1 := "field1"
-	expectedField2 := "field2"
-	expectedField3 := "field3"
-	expectedField4 := "field4"
-	expectedNames := map[string]*string{"#0": &expectedKey0, "#1": &expectedField0, "#2": &expectedField1, "#3": &expectedField2, "#4": &expectedField3, "#5": &expectedField4}
+	expectedNames := map[string]*string{
+		"#0": name("pk"),
+		"#1": name("field0"),
+		"#2": name("field1"),
+		"#3": name("field2"),
+		"#4": name("field3"),
+		"#5": name("field4"),
+	}
 
-	expectedValueStr0 := "1000"
-	expectedValue0 := dynamodb.AttributeValue{N: &expectedValueStr0}
-	expectedValueStr1 := "str1"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValueStr1}
-	expectedValueStr2 := "15"
-	expectedValue2 := dynamodb.AttributeValue{N: &expectedValueStr2}
-	expectedValueStr3 := "10"
-	expectedValue3 := dynamodb.AttributeValue{N: &expectedValueStr3}
-	expectedValueStr4 := "11"
-	expectedValue4 := dynamodb.AttributeValue{N: &expectedValueStr4}
-	expectedValueStr5 := "12"
-	expectedValue5 := dynamodb.AttributeValue{N: &expectedValueStr5}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2, ":3": &expectedValue3, ":4": &expectedValue4, ":5": &expectedValue5}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": integer(1000),
+		":1": str("str1"),
+		":2": integer(15),
+		":3": integer(10),
+		":4": integer(11),
+		":5": integer(12),
+	}
 
 	// when
-	var expr params = parseQuery("pk = 1000", "field0 > 'str1' OR field1 < 15 OR field2 >= 10 OR field3 <= 11 OR field4 <> 12", "")
+	exprParser := newExprParser()
+	key := exprParser.parseGenericExpression("pk = 1000")
+	filter := exprParser.parseGenericExpression("field0 > 'str1' OR field1 < 15 OR field2 >= 10 OR field3 <= 11 OR field4 <> 12")
 
 	// then
-	require.Equal(t, expectedKeyCondition, *expr.keyExpr())
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedKeyCondition, *key)
+	require.Equal(t, expectedFilterCondition, *filter)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_between(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 BETWEEN :0 AND :1"
 
-	expectedName0 := "field0"
-	expectedNames := map[string]*string{"#0": &expectedName0}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+	}
 
-	expectedValue0Str := "value0"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValue0Str}
-	expectedValue1Str := "value1"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValue1Str}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("value0"),
+		":1": str("value1"),
+	}
 
 	// when
-	var expr params = parseQuery("", "field0 BETWEEN 'value0' AND 'value1'", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field0 BETWEEN 'value0' AND 'value1'")
 
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_in(t *testing.T) {
 	// given
 	expectedFilterCondition := "#0 IN (:0, :1, :2)"
 
-	expectedName0 := "field1"
-	expectedNames := map[string]*string{"#0": &expectedName0}
+	expectedNames := map[string]*string{
+		"#0": name("field1"),
+	}
 
-	expectedValue0Str := "value0"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValue0Str}
-	expectedValue1Str := "value1"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValue1Str}
-	expectedValue2Str := "value2"
-	expectedValue2 := dynamodb.AttributeValue{S: &expectedValue2Str}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("value0"),
+		":1": str("value1"),
+		":2": str("value2"),
+	}
 
 	// when
-	var expr params = parseQuery("", "field1 IN ('value0', 'value1', 'value2')", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("field1 IN ('value0', 'value1', 'value2')")
 
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_functions(t *testing.T) {
 	// given
 	expectedFilterCondition := "begins_with(#0, :0) OR attribute_exists(#1) OR attribute_not_exists(#2) OR attribute_type(#3, :1) OR contains(#4, :2)"
 
-	expectedName0 := "field0"
-	expectedName1 := "field1"
-	expectedName2 := "field2"
-	expectedName3 := "field3"
-	expectedName4 := "field4"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2, "#3": &expectedName3, "#4": &expectedName4}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+		"#1": name("field1"),
+		"#2": name("field2"),
+		"#3": name("field3"),
+		"#4": name("field4"),
+	}
 
-	expectedValue0Str := "someStr0"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValue0Str}
-	expectedValue1Str := "S"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValue1Str}
-	expectedValue2Str := "someStr1"
-	expectedValue2 := dynamodb.AttributeValue{S: &expectedValue2Str}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("someStr0"),
+		":1": str("S"),
+		":2": str("someStr1"),
+	}
 
 	// when
-	var expr params = parseQuery("", "begins_with(field0, 'someStr0') OR attribute_exists(field1) OR attribute_not_exists(field2) OR attribute_type(field3, 'S') OR contains(field4, 'someStr1')", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("begins_with(field0, 'someStr0') OR attribute_exists(field1) OR attribute_not_exists(field2) OR attribute_type(field3, 'S') OR contains(field4, 'someStr1')")
 
 	// then
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_extraSpaces(t *testing.T) {
 	// given
 	expectedFilterCondition := "   #0   IN  ( :0,   :1,:2  ) AND   begins_with(   #1  ,  :3   )  AND #2   =   :4"
 
-	expectedName0 := "field0"
-	expectedName1 := "field1"
-	expectedName2 := "field2"
-	expectedNames := map[string]*string{"#0": &expectedName0, "#1": &expectedName1, "#2": &expectedName2}
+	expectedNames := map[string]*string{
+		"#0": name("field0"),
+		"#1": name("field1"),
+		"#2": name("field2"),
+	}
 
-	expectedValue0Str := "value0"
-	expectedValue0 := dynamodb.AttributeValue{S: &expectedValue0Str}
-	expectedValue1Str := "value1"
-	expectedValue1 := dynamodb.AttributeValue{S: &expectedValue1Str}
-	expectedValue2Str := "value2"
-	expectedValue2 := dynamodb.AttributeValue{S: &expectedValue2Str}
-	expectedValue3Str := "value3"
-	expectedValue3 := dynamodb.AttributeValue{S: &expectedValue3Str}
-	expectedValue4Num := "123"
-	expectedValue4 := dynamodb.AttributeValue{N: &expectedValue4Num}
-	expectedValues := map[string]*dynamodb.AttributeValue{":0": &expectedValue0, ":1": &expectedValue1, ":2": &expectedValue2, ":3": &expectedValue3, ":4": &expectedValue4}
+	expectedValues := map[string]*dynamodb.AttributeValue{
+		":0": str("value0"),
+		":1": str("value1"),
+		":2": str("value2"),
+		":3": str("value3"),
+		":4": integer(123),
+	}
 
 	// when
-	var expr params = parseQuery("", "   field0   IN  ( 'value0',   'value1','value2'  ) AND   begins_with(   field1  ,  'value3'   )  AND field2   =   123", "")
+	exprParser := newExprParser()
+	expr := exprParser.parseGenericExpression("   field0   IN  ( 'value0',   'value1','value2'  ) AND   begins_with(   field1  ,  'value3'   )  AND field2   =   123")
 
-	require.Equal(t, expectedFilterCondition, *expr.filterExpr())
-	require.Equal(t, expectedNames, expr.getNames())
-	require.Equal(t, expectedValues, expr.getValues())
-	require.Nil(t, expr.keyExpr())
-	require.Nil(t, expr.projExpr())
+	require.Equal(t, expectedFilterCondition, *expr)
+	require.Equal(t, expectedNames, exprParser.getNames())
+	require.Equal(t, expectedValues, exprParser.getValues())
 }
 
 func Test_query_projection(t *testing.T) {
-	empty := parseQuery("pk = 1000", "", "   ")
-	single := parseQuery("pk = 1000", "", "a")
-	multiple := parseQuery("pk = 1000", "", "a,b,c")
-	multipleWithSpaces := parseQuery("pk = 1000", "", "a, b,c")
-	complexNames := parseQuery("pk = 1000", "", "a.b[0].c, d.e, f.g[0]")
+	exprParser := newExprParser()
+	empty := exprParser.parseProjectionExpression("   ")
+	require.Nil(t, empty)
 
-	require.Nil(t, empty.projExpr())
+	exprParser = newExprParser()
+	single := exprParser.parseProjectionExpression("a")
+	require.Equal(t, "#0", *single)
+	require.Equal(t, "a", *exprParser.getNames()["#0"], "pk")
 
-	require.Equal(t, *single.projExpr(), "#1")
-	require.Equal(t, *single.getNames()["#0"], "pk")
-	require.Equal(t, *single.getNames()["#1"], "a")
+	exprParser = newExprParser()
+	multiple := exprParser.parseProjectionExpression("a,b,c")
+	require.Equal(t, "#0,#1,#2", *multiple)
+	require.Equal(t, *exprParser.getNames()["#0"], "a")
+	require.Equal(t, *exprParser.getNames()["#1"], "b")
+	require.Equal(t, *exprParser.getNames()["#2"], "c")
 
-	require.Equal(t, *multiple.projExpr(), "#1,#2,#3")
-	require.Equal(t, *multiple.getNames()["#0"], "pk")
-	require.Equal(t, *multiple.getNames()["#1"], "a")
-	require.Equal(t, *multiple.getNames()["#2"], "b")
-	require.Equal(t, *multiple.getNames()["#3"], "c")
+	exprParser = newExprParser()
+	multipleWithSpaces := exprParser.parseProjectionExpression("a, b,c")
+	require.Equal(t, "#0,#1,#2", *multipleWithSpaces)
+	require.Equal(t, *exprParser.getNames()["#0"], "a")
+	require.Equal(t, *exprParser.getNames()["#1"], "b")
+	require.Equal(t, *exprParser.getNames()["#2"], "c")
 
-	require.Equal(t, *multipleWithSpaces.projExpr(), "#1,#2,#3")
-	require.Equal(t, *multiple.getNames()["#0"], "pk")
-	require.Equal(t, *multiple.getNames()["#1"], "a")
-	require.Equal(t, *multiple.getNames()["#2"], "b")
-	require.Equal(t, *multiple.getNames()["#3"], "c")
-
-	require.Equal(t, *complexNames.projExpr(), "#1.#2[0].#3,#4.#5,#6.#7[0]")
+	exprParser = newExprParser()
+	complexNames := exprParser.parseProjectionExpression("a.b[0].c, d.e, f.g[0]")
+	require.Equal(t, "#0.#1[0].#2,#3.#4,#5.#6[0]", *complexNames)
 }
 
 func Test_types_stringEscaping(t *testing.T) {
-	escapedSlashes := parseQuery("pk = 'someStr\\\\'", "", "")
-	escapedSingleQuotes := parseQuery("pk = 'It\\'s an apostrophe'", "", "")
-	escapedDoubleQuotes := parseQuery("pk = '\\\"Something\\\", he said'", "", "")
+	exprParser := newExprParser()
 
-	require.Equal(t, "someStr\\", *escapedSlashes.getValues()[":0"].S)
-	require.Equal(t, "It's an apostrophe", *escapedSingleQuotes.getValues()[":0"].S)
-	require.Equal(t, "\"Something\", he said", *escapedDoubleQuotes.getValues()[":0"].S)
+	exprParser.parseGenericExpression("pk = 'someStr\\\\'")
+	exprParser.parseGenericExpression("pk = 'It\\'s an apostrophe'")
+	exprParser.parseGenericExpression("pk = '\\\"Something\\\", he said'")
+
+	require.Equal(t, "someStr\\", *exprParser.getValues()[":0"].S)
+	require.Equal(t, "It's an apostrophe", *exprParser.getValues()[":1"].S)
+	require.Equal(t, "\"Something\", he said", *exprParser.getValues()[":2"].S)
 }
 
 func Test_names_nameEscaping(t *testing.T) {
-	escapedKeyword := parseQuery("`size` = 123", "", "")
-	escapedNumber := parseQuery("`123` = 'abcd'", "", "")
-	escapedComplexName := parseQuery("`a`.b[3].`c d`.`e`[2] = 'abcd'", "", "")
+	exprParser := newExprParser()
+	exprParser.parseGenericExpression("`size` = 123")
+	require.Equal(t, "size", *exprParser.getNames()["#0"])
 
-	require.Equal(t, "size", *escapedKeyword.getNames()["#0"])
-	require.Equal(t, "123", *escapedNumber.getNames()["#0"])
+	exprParser = newExprParser()
+	exprParser.parseGenericExpression("`123` = 'abcd'")
+	require.Equal(t, "123", *exprParser.getNames()["#0"])
 
-	require.Equal(t, "a", *escapedComplexName.getNames()["#0"])
-	require.Equal(t, "b", *escapedComplexName.getNames()["#1"])
-	require.Equal(t, "c d", *escapedComplexName.getNames()["#2"])
-	require.Equal(t, "e", *escapedComplexName.getNames()["#3"])
-	require.Equal(t, "#0.#1[3].#2.#3[2] = :0", *escapedComplexName.keyExpr())
+	exprParser = newExprParser()
+	escapedComplexName := exprParser.parseGenericExpression("`a`.b[3].`c d`.`e`[2] = 'abcd'")
+	require.Equal(t, "#0.#1[3].#2.#3[2] = :0", *escapedComplexName)
+	require.Equal(t, "a", *exprParser.getNames()["#0"])
+	require.Equal(t, "b", *exprParser.getNames()["#1"])
+	require.Equal(t, "c d", *exprParser.getNames()["#2"])
+	require.Equal(t, "e", *exprParser.getNames()["#3"])
+}
+
+func name(str string) *string {
+	return &str
+}
+
+func str(str string) *dynamodb.AttributeValue {
+	out := dynamodb.AttributeValue{S: &str}
+	return &out
+}
+
+func integer(integer int) *dynamodb.AttributeValue {
+	str := fmt.Sprint(integer)
+	out := dynamodb.AttributeValue{N: &str}
+	return &out
+}
+
+func float(float float64) *dynamodb.AttributeValue {
+	str := fmt.Sprint(float)
+	out := dynamodb.AttributeValue{N: &str}
+	return &out
+}
+
+func boolean(boolean bool) *dynamodb.AttributeValue {
+	out := dynamodb.AttributeValue{BOOL: &boolean}
+	return &out
+}
+
+func stringSet(strings []string) *dynamodb.AttributeValue {
+	pointers := []*string{}
+	for i := range strings {
+		pointers = append(pointers, &strings[i])
+
+	}
+	out := dynamodb.AttributeValue{SS: pointers}
+	return &out
+}
+
+func numberSet(numbers []string) *dynamodb.AttributeValue {
+	pointers := []*string{}
+	for i := range numbers {
+		pointers = append(pointers, &numbers[i])
+
+	}
+	out := dynamodb.AttributeValue{NS: pointers}
+	return &out
 }

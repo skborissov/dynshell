@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -10,12 +8,12 @@ import (
 	"github.com/jessevdk/go-flags"
 )
 
-type TableContext struct {
-	tableNames         []*string
-	name               string
-	hashAttributeName  string
-	rangeAttributeName string
-	indexNames         []string
+type tableContext struct {
+	name           string
+	hashAttribute  string
+	rangeAttribute string
+	indexes        []string
+	allTables      []*string
 }
 
 func createDynamo(endpointUrl *string, region *string) *dynamodb.DynamoDB {
@@ -40,12 +38,10 @@ func main() {
 		panic(err)
 	}
 
-	defer fmt.Println("Goodbye")
-
 	dynamo := createDynamo(&opts.EndpointUrl, &opts.Region)
 	listTablesOutput, _ := dynamo.ListTables(&dynamodb.ListTablesInput{})
-	tableCtx := TableContext{
-		tableNames: listTablesOutput.TableNames,
+	tableCtx := tableContext{
+		allTables: listTablesOutput.TableNames,
 	}
 
 	livePrefix := func() (prefix string, live bool) {
@@ -57,11 +53,9 @@ func main() {
 		return promptPrefix, true
 	}
 
-	executor := newExecutor(dynamo, &tableCtx)
-	completer := newCompleter(&tableCtx)
 	p := prompt.New(
-		executor.Execute,
-		completer.Complete,
+		newExecutor(dynamo, &tableCtx).execute,
+		newCompleter(&tableCtx).complete,
 		prompt.OptionTitle("dynshell"),
 		prompt.OptionLivePrefix(livePrefix),
 		prompt.OptionAddKeyBind(prompt.KeyBind{

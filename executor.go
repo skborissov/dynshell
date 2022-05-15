@@ -13,13 +13,13 @@ import (
 	"github.com/jessevdk/go-flags"
 )
 
-type Executor struct {
+type executor struct {
 	dynamo   *dynamodb.DynamoDB
-	tableCtx *TableContext
+	tableCtx *tableContext
 }
 
-func newExecutor(dynamo *dynamodb.DynamoDB, tableCtx *TableContext) Executor {
-	return Executor{dynamo: dynamo, tableCtx: tableCtx}
+func newExecutor(dynamo *dynamodb.DynamoDB, tableCtx *tableContext) executor {
+	return executor{dynamo: dynamo, tableCtx: tableCtx}
 }
 
 type readOpts struct {
@@ -63,17 +63,18 @@ type updateOpts struct {
 	Update string `short:"u" long:"update" description:"Update expression" required:"true"`
 }
 
-func (e Executor) Execute(input string) {
+func (e executor) execute(input string) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println(r)
+			// if debug is not on and input is given, print input
 		}
 	}()
 
 	e.handleInput(input)
 }
 
-func (e Executor) handleInput(input string) {
+func (e executor) handleInput(input string) {
 	firstSeparatorIdx := strings.Index(input, " ")
 
 	var command string = input
@@ -109,17 +110,12 @@ func (e Executor) handleInput(input string) {
 	}
 }
 
-func (e Executor) handleUse(tableName string) {
+func (e executor) handleUse(tableName string) {
 	output, err := e.dynamo.DescribeTable(&dynamodb.DescribeTableInput{
 		TableName: &tableName,
 	})
 
 	if err != nil {
-		if strings.Contains(err.Error(), "ResourceNotFoundException") {
-			fmt.Printf("Couldn't find table with name: %s\n", tableName)
-			return
-		}
-
 		panic(err)
 	}
 
@@ -127,10 +123,10 @@ func (e Executor) handleUse(tableName string) {
 
 	for _, s := range output.Table.KeySchema {
 		if *s.KeyType == "HASH" {
-			e.tableCtx.hashAttributeName = *s.AttributeName
+			e.tableCtx.hashAttribute = *s.AttributeName
 		}
 		if *s.KeyType == "RANGE" {
-			e.tableCtx.rangeAttributeName = *s.AttributeName
+			e.tableCtx.rangeAttribute = *s.AttributeName
 		}
 	}
 
@@ -142,10 +138,10 @@ func (e Executor) handleUse(tableName string) {
 		indexNames = append(indexNames, *lsi.IndexName)
 	}
 
-	e.tableCtx.indexNames = indexNames
+	e.tableCtx.indexes = indexNames
 }
 
-func (e Executor) handleDesc() {
+func (e executor) handleDesc() {
 	e.validateTableSelected()
 
 	describeInput := dynamodb.DescribeTableInput{
@@ -153,14 +149,14 @@ func (e Executor) handleDesc() {
 	}
 
 	describeOutput, err := e.dynamo.DescribeTable(&describeInput)
-	if err != nil {
-		fmt.Println("Error occurred: ", err)
-	} else {
+	if err == nil {
 		fmt.Println(describeOutput)
+	} else {
+		panic(err)
 	}
 }
 
-func (e Executor) handleQuery(args string) {
+func (e executor) handleQuery(args string) {
 	e.validateTableSelected()
 
 	queryOpts := queryOpts{}
@@ -170,15 +166,19 @@ func (e Executor) handleQuery(args string) {
 		return
 	}
 
-	expr := parseQuery(queryOpts.Key, queryOpts.Filter, queryOpts.Projection)
+	exprParser := newExprParser()
+
+	key := exprParser.parseGenericExpression(queryOpts.Key)
+	filter := exprParser.parseGenericExpression(queryOpts.Filter)
+	proj := exprParser.parseProjectionExpression(queryOpts.Projection)
 
 	queryInput := dynamodb.QueryInput{
 		TableName:                 &e.tableCtx.name,
-		ExpressionAttributeNames:  expr.getNames(),
-		ExpressionAttributeValues: expr.getValues(),
-		KeyConditionExpression:    expr.keyExpr(),
-		FilterExpression:          expr.filterExpr(),
-		ProjectionExpression:      expr.projExpr(),
+		ExpressionAttributeNames:  exprParser.getNames(),
+		ExpressionAttributeValues: exprParser.getValues(),
+		KeyConditionExpression:    key,
+		FilterExpression:          filter,
+		ProjectionExpression:      proj,
 	}
 
 	if queryOpts.Index != "" {
@@ -205,18 +205,14 @@ func (e Executor) handleQuery(args string) {
 	}
 
 	queryOutput, err := e.dynamo.Query(&queryInput)
-	if err != nil {
-		if !opts.Verbose {
-			// If debug is off, print whole input anyway
-			fmt.Printf("DEBUG input: %v\n", queryInput)
-		}
-		fmt.Println("Error occurred: ", err)
-	} else {
+	if err == nil {
 		fmt.Println(prettify(queryOutput))
+	} else {
+		handleDynamoError(err, queryInput.String())
 	}
 }
 
-func (e Executor) handleScan(args string) {
+func (e executor) handleScan(args string) {
 	e.validateTableSelected()
 
 	scanOpts := scanOpts{}
@@ -226,14 +222,17 @@ func (e Executor) handleScan(args string) {
 		return
 	}
 
-	expr := parseQuery("", scanOpts.Filter, scanOpts.Projection)
+	exprParser := newExprParser()
+
+	filter := exprParser.parseGenericExpression(scanOpts.Filter)
+	proj := exprParser.parseProjectionExpression(scanOpts.Projection)
 
 	scanInput := dynamodb.ScanInput{
 		TableName:                 &e.tableCtx.name,
-		ExpressionAttributeNames:  expr.getNames(),
-		ExpressionAttributeValues: expr.getValues(),
-		FilterExpression:          expr.filterExpr(),
-		ProjectionExpression:      expr.projExpr(),
+		ExpressionAttributeNames:  exprParser.getNames(),
+		ExpressionAttributeValues: exprParser.getValues(),
+		FilterExpression:          filter,
+		ProjectionExpression:      proj,
 	}
 
 	if scanOpts.Index != "" {
@@ -263,14 +262,14 @@ func (e Executor) handleScan(args string) {
 	}
 
 	scanOutput, err := e.dynamo.Scan(&scanInput)
-	if err != nil {
-		fmt.Println("Error occurred: ", err)
-	} else {
+	if err == nil {
 		fmt.Println(prettify(scanOutput))
+	} else {
+		handleDynamoError(err, scanInput.String())
 	}
 }
 
-func (e Executor) handleDelete(args string) {
+func (e executor) handleDelete(args string) {
 	e.validateTableSelected()
 
 	deleteOpts := deleteOpts{}
@@ -291,10 +290,13 @@ func (e Executor) handleDelete(args string) {
 	}
 
 	if deleteOpts.ConditionExpression != "" {
-		expr := parseQuery("", deleteOpts.ConditionExpression, "")
-		deleteItemInput.ConditionExpression = expr.filterExpr()
-		deleteItemInput.ExpressionAttributeNames = expr.getNames()
-		deleteItemInput.ExpressionAttributeValues = expr.getValues()
+		exprParser := newExprParser()
+
+		condition := exprParser.parseGenericExpression(deleteOpts.ConditionExpression)
+
+		deleteItemInput.ConditionExpression = condition
+		deleteItemInput.ExpressionAttributeNames = exprParser.getNames()
+		deleteItemInput.ExpressionAttributeValues = exprParser.getValues()
 	}
 
 	if deleteOpts.ConsumedCapacity != "" {
@@ -314,14 +316,14 @@ func (e Executor) handleDelete(args string) {
 	}
 
 	deleteOutput, err := e.dynamo.DeleteItem(&deleteItemInput)
-	if err != nil {
-		fmt.Println("Error occurred: ", err)
-	} else {
+	if err == nil {
 		fmt.Println(prettify(deleteOutput))
+	} else {
+		handleDynamoError(err, deleteItemInput.String())
 	}
 }
 
-func (e Executor) handleUpdate(args string) {
+func (e executor) handleUpdate(args string) {
 	e.validateTableSelected()
 
 	updateOpts := updateOpts{}
@@ -336,15 +338,18 @@ func (e Executor) handleUpdate(args string) {
 		panic(keyParseErr)
 	}
 
-	expr := parseQuery(updateOpts.Update, updateOpts.ConditionExpression, "")
+	exprParser := newExprParser()
+
+	update := exprParser.parseGenericExpression(updateOpts.Update)
+	condition := exprParser.parseGenericExpression(updateOpts.ConditionExpression)
 
 	updateItemInput := dynamodb.UpdateItemInput{
 		TableName:                 &e.tableCtx.name,
 		Key:                       keyMap.M,
-		UpdateExpression:          expr.keyExpr(),
-		ConditionExpression:       expr.filterExpr(),
-		ExpressionAttributeNames:  expr.getNames(),
-		ExpressionAttributeValues: expr.getValues(),
+		UpdateExpression:          update,
+		ConditionExpression:       condition,
+		ExpressionAttributeNames:  exprParser.getNames(),
+		ExpressionAttributeValues: exprParser.getValues(),
 	}
 
 	if updateOpts.ConsumedCapacity != "" {
@@ -364,19 +369,26 @@ func (e Executor) handleUpdate(args string) {
 	}
 
 	updateOutput, err := e.dynamo.UpdateItem(&updateItemInput)
-	if err != nil {
-		fmt.Println("Error occurred: ", err)
-	} else {
+	if err == nil {
 		fmt.Println(prettify(updateOutput))
+	} else {
+		handleDynamoError(err, updateItemInput.String())
 	}
 
 }
 
-func (e Executor) validateTableSelected() {
+func (e executor) validateTableSelected() {
 	if e.tableCtx.name == "" {
 		panic("No table selected!")
 	}
+}
 
+func handleDynamoError(err error, cmdInput string) {
+	errOut := err.Error()
+	if !opts.Verbose {
+		errOut = errOut + "\n" + "DEBUG input: \n" + cmdInput
+	}
+	panic(errOut)
 }
 
 // split args by ' ' and group quoted args

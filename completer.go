@@ -11,15 +11,15 @@ import (
 
 var commands []string = []string{"exit", "use", "desc", "query", "scan", "delete", "update"}
 
-func newCompleter(tableCtx *TableContext) Completer {
-	return Completer{tableCtx: tableCtx}
+func newCompleter(tableCtx *tableContext) completer {
+	return completer{tableCtx: tableCtx}
 }
 
-type Completer struct {
-	tableCtx *TableContext
+type completer struct {
+	tableCtx *tableContext
 }
 
-func (c *Completer) Complete(doc prompt.Document) []prompt.Suggest {
+func (c completer) complete(doc prompt.Document) []prompt.Suggest {
 	if len(doc.CurrentLineBeforeCursor()) == 0 {
 		return []prompt.Suggest{}
 	}
@@ -46,7 +46,7 @@ func (c *Completer) Complete(doc prompt.Document) []prompt.Suggest {
 	}
 }
 
-func (c *Completer) completeCmd(doc prompt.Document) []prompt.Suggest {
+func (c completer) completeCmd(doc prompt.Document) []prompt.Suggest {
 	matches := []prompt.Suggest{}
 
 	for _, cmd := range commands {
@@ -63,10 +63,9 @@ func (c *Completer) completeCmd(doc prompt.Document) []prompt.Suggest {
 	}
 
 	return matches
-
 }
 
-func (c *Completer) completeUse(doc prompt.Document) []prompt.Suggest {
+func (c completer) completeUse(doc prompt.Document) []prompt.Suggest {
 	words := strings.Split(doc.CurrentLineBeforeCursor(), " ")
 
 	if len(words) > 2 {
@@ -78,7 +77,7 @@ func (c *Completer) completeUse(doc prompt.Document) []prompt.Suggest {
 
 		matches := []prompt.Suggest{}
 
-		for _, table := range c.tableCtx.tableNames {
+		for _, table := range c.tableCtx.allTables {
 			isCurrentTable := c.tableCtx.name == *table
 
 			if !isCurrentTable && strings.HasPrefix(*table, inputTable) {
@@ -91,14 +90,14 @@ func (c *Completer) completeUse(doc prompt.Document) []prompt.Suggest {
 
 	matches := []prompt.Suggest{}
 
-	for _, table := range c.tableCtx.tableNames {
+	for _, table := range c.tableCtx.allTables {
 		matches = append(matches, prompt.Suggest{Text: *table})
 	}
 
 	return matches
 }
 
-func (c *Completer) completeQuery(doc prompt.Document) (suggestions []prompt.Suggest) {
+func (c completer) completeQuery(doc prompt.Document) (suggestions []prompt.Suggest) {
 	matched, suggestions := c.completeKeyFirst(doc, true)
 	if matched {
 		return suggestions
@@ -115,37 +114,49 @@ func (c *Completer) completeQuery(doc prompt.Document) (suggestions []prompt.Sug
 	return c.completeRead(doc, unusedFlags)
 }
 
-func (c *Completer) completeScan(doc prompt.Document) (suggestions []prompt.Suggest) {
+func (c completer) completeScan(doc prompt.Document) (suggestions []prompt.Suggest) {
 	unusedFlags := getUnusedFlags(doc, &readOpts{})
 	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &scanOpts{})...)
 
 	return c.completeRead(doc, unusedFlags)
 }
 
-func (c *Completer) completeRead(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
+func (c completer) completeRead(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
 	readFlags := getCmdFlags(&readOpts{})
-	enumFlags := map[flag][]string{
-		findFlagByShort(readFlags, "s"): {"ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES", "SPECIFIC_ATTRIBUTES", "COUNT"},
-		findFlagByShort(readFlags, "r"): {"INDEXES", "TOTAL", "NONE"},
-		findFlagByShort(readFlags, "i"): c.tableCtx.indexNames}
+
+	enumFlags := map[flag][]string{}
+
+	selectFlag := findFlagByShort(readFlags, "s")
+	capacityFlag := findFlagByShort(readFlags, "r")
+	indexFlag := findFlagByShort(readFlags, "i")
+
+	if selectFlag != nil {
+		enumFlags[*selectFlag] = []string{"ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES", "SPECIFIC_ATTRIBUTES", "COUNT"}
+	}
+	if capacityFlag != nil {
+		enumFlags[*capacityFlag] = []string{"INDEXES", "TOTAL", "NONE"}
+	}
+	if indexFlag != nil {
+		enumFlags[*indexFlag] = c.tableCtx.indexes
+	}
 
 	return c.completeFlags(doc, unusedFlags, enumFlags)
 }
 
-func (c *Completer) completeDelete(doc prompt.Document) (suggestions []prompt.Suggest) {
+func (c completer) completeDelete(doc prompt.Document) (suggestions []prompt.Suggest) {
 	unusedFlags := getUnusedFlags(doc, &writeOpts{})
 
 	return c.completeWrite(doc, unusedFlags)
 }
 
-func (c *Completer) completeUpdate(doc prompt.Document) (suggestions []prompt.Suggest) {
+func (c completer) completeUpdate(doc prompt.Document) (suggestions []prompt.Suggest) {
 	unusedFlags := getUnusedFlags(doc, &writeOpts{})
 	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &updateOpts{})...)
 
 	return c.completeWrite(doc, unusedFlags)
 }
 
-func (c *Completer) completeWrite(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
+func (c completer) completeWrite(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
 	matched, suggestions := c.completeKeyFirst(doc, false)
 	if matched {
 		return suggestions
@@ -157,13 +168,18 @@ func (c *Completer) completeWrite(doc prompt.Document, unusedFlags []flag) (sugg
 	}
 
 	writeFlags := getCmdFlags(&writeOpts{})
-	enumFlags := map[flag][]string{
-		findFlagByShort(writeFlags, "r"): {"INDEXES", "TOTAL", "NONE"}}
+	enumFlags := map[flag][]string{}
+
+	capacityFlag := findFlagByShort(writeFlags, "r")
+
+	if capacityFlag != nil {
+		enumFlags[*capacityFlag] = []string{"INDEXES", "TOTAL", "NONE"}
+	}
 
 	return c.completeFlags(doc, unusedFlags, enumFlags)
 }
 
-func (c *Completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumFlags map[flag][]string) (suggestions []prompt.Suggest) {
+func (c completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumFlags map[flag][]string) (suggestions []prompt.Suggest) {
 	if isInParameter(doc) {
 		return []prompt.Suggest{}
 	}
@@ -173,7 +189,7 @@ func (c *Completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumF
 		return suggestions
 	}
 
-	matched, suggestions = completeEnum(doc, &enumFlags)
+	matched, suggestions = completeEnum(doc, enumFlags)
 	if matched {
 		return suggestions
 	}
@@ -184,31 +200,32 @@ func (c *Completer) completeFlags(doc prompt.Document, unusedFlags []flag, enumF
 func completeFlag(doc prompt.Document, unusedFlags []flag) (matched bool, suggestions []prompt.Suggest) {
 	var rgxFlag = regexp.MustCompile(`.* (-{1,2})([a-zA-Z]*)$`)
 	allMatches := rgxFlag.FindAllStringSubmatch(doc.CurrentLineBeforeCursor(), -1)
-	if len(allMatches) > 0 {
-		matched = true
 
-		matches := allMatches[len(allMatches)-1]
-
-		flagInput := matches[2]
-
-		for _, unusedFlag := range unusedFlags {
-			if len(matches[1]) == 1 && unusedFlag.short != "" && strings.HasPrefix(unusedFlag.short, flagInput) {
-				suggestions = append(suggestions, prompt.Suggest{Text: unusedFlag.short, Description: unusedFlag.desc})
-			}
-			if len(matches[1]) == 2 && strings.HasPrefix(unusedFlag.long, flagInput) {
-				suggestions = append(suggestions, prompt.Suggest{Text: unusedFlag.long, Description: unusedFlag.desc})
-			}
-		}
-
-		sort.Slice(suggestions, func(i, j int) bool {
-			return suggestions[i].Text < suggestions[j].Text
-		})
+	if len(allMatches) == 0 {
+		return false, []prompt.Suggest{}
 	}
 
-	return matched, suggestions
+	matches := allMatches[len(allMatches)-1]
+
+	flagInput := matches[2]
+
+	for _, unusedFlag := range unusedFlags {
+		if len(matches[1]) == 1 && unusedFlag.short != "" && strings.HasPrefix(unusedFlag.short, flagInput) {
+			suggestions = append(suggestions, prompt.Suggest{Text: unusedFlag.short, Description: unusedFlag.desc})
+		}
+		if len(matches[1]) == 2 && strings.HasPrefix(unusedFlag.long, flagInput) {
+			suggestions = append(suggestions, prompt.Suggest{Text: unusedFlag.long, Description: unusedFlag.desc})
+		}
+	}
+
+	sort.Slice(suggestions, func(i, j int) bool {
+		return suggestions[i].Text < suggestions[j].Text
+	})
+
+	return true, suggestions
 }
 
-func (c *Completer) completeKeyFirst(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
+func (c completer) completeKeyFirst(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
 	var rgxKeyStart *regexp.Regexp
 	if isExpression {
 		rgxKeyStart = regexp.MustCompile(`.* (-k|--key) "(\s*)([a-zA-Z0-9_]*)$`)
@@ -217,22 +234,23 @@ func (c *Completer) completeKeyFirst(doc prompt.Document, isExpression bool) (ma
 	}
 
 	matches := rgxKeyStart.FindStringSubmatch(doc.CurrentLineBeforeCursor())
-	if len(matches) > 0 {
-		matched = true
 
-		keyInput := matches[len(matches)-1]
-		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
-			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
-		}
-		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
-			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
-		}
+	if len(matches) == 0 {
+		return false, []prompt.Suggest{}
 	}
 
-	return matched, suggestions
+	keyInput := matches[len(matches)-1]
+	if strings.HasPrefix(c.tableCtx.hashAttribute, keyInput) {
+		suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttribute, Description: "pk"})
+	}
+	if c.tableCtx.rangeAttribute != "" && strings.HasPrefix(c.tableCtx.rangeAttribute, keyInput) {
+		suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttribute, Description: "sk"})
+	}
+
+	return true, suggestions
 }
 
-func (c *Completer) completeKeySecond(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
+func (c completer) completeKeySecond(doc prompt.Document, isExpression bool) (matched bool, suggestions []prompt.Suggest) {
 	var rgxKeyAnd *regexp.Regexp
 	if isExpression {
 		rgxKeyAnd = regexp.MustCompile(`.* (-k|--key) "(.*) AND(\s+)([a-zA-Z0-9_]*)$`)
@@ -242,37 +260,37 @@ func (c *Completer) completeKeySecond(doc prompt.Document, isExpression bool) (m
 
 	matches := rgxKeyAnd.FindStringSubmatch(doc.CurrentLineBeforeCursor())
 
-	if len(matches) > 0 {
-		matched = true
+	if len(matches) == 0 {
+		return false, []prompt.Suggest{}
+	}
 
-		var firstCondition string
-		if isExpression {
-			firstCondition = matches[2]
-		} else {
-			firstCondition = matches[3]
-		}
+	var firstCondition string
+	if isExpression {
+		firstCondition = matches[2]
+	} else {
+		firstCondition = matches[3]
+	}
 
-		keyInput := matches[len(matches)-1]
-		if strings.HasPrefix(c.tableCtx.hashAttributeName, keyInput) {
-			if !strings.Contains(firstCondition, c.tableCtx.hashAttributeName) {
-				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttributeName, Description: "pk"})
-			}
+	keyInput := matches[len(matches)-1]
+	if strings.HasPrefix(c.tableCtx.hashAttribute, keyInput) {
+		if !strings.Contains(firstCondition, c.tableCtx.hashAttribute) {
+			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.hashAttribute, Description: "pk"})
 		}
-		if c.tableCtx.rangeAttributeName != "" && strings.HasPrefix(c.tableCtx.rangeAttributeName, keyInput) {
-			if !strings.Contains(firstCondition, c.tableCtx.rangeAttributeName) {
-				suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttributeName, Description: "sk"})
-			}
+	}
+	if c.tableCtx.rangeAttribute != "" && strings.HasPrefix(c.tableCtx.rangeAttribute, keyInput) {
+		if !strings.Contains(firstCondition, c.tableCtx.rangeAttribute) {
+			suggestions = append(suggestions, prompt.Suggest{Text: c.tableCtx.rangeAttribute, Description: "sk"})
 		}
 	}
 
-	return matched, suggestions
+	return true, suggestions
 }
 
-func completeEnum(doc prompt.Document, enumVals *map[flag][]string) (matched bool, suggestions []prompt.Suggest) {
-	keys := make([]string, len(*enumVals)*2)
+func completeEnum(doc prompt.Document, enumVals map[flag][]string) (matched bool, suggestions []prompt.Suggest) {
+	keys := make([]string, len(enumVals)*2)
 
 	i := 0
-	for k := range *enumVals {
+	for k := range enumVals {
 		keys[i] = k.short
 		i++
 		keys[i] = k.long
@@ -283,25 +301,26 @@ func completeEnum(doc prompt.Document, enumVals *map[flag][]string) (matched boo
 	var rgxEnums = regexp.MustCompile(`(-{1,2})(` + enumMatch + `)(\s+)([A-Za-z]*)$`)
 
 	allMatches := rgxEnums.FindAllStringSubmatch(doc.CurrentLineBeforeCursor(), -1)
-	if len(allMatches) > 0 {
-		matched = true
 
-		match := allMatches[len(allMatches)-1]
+	if len(allMatches) == 0 {
+		return false, []prompt.Suggest{}
+	}
 
-		for k, v := range *enumVals {
-			if (match[1] == "-" && match[2] == k.short) || (match[1] == "--" && match[2] == k.long) {
-				enumInput := match[4]
+	match := allMatches[len(allMatches)-1]
 
-				for _, value := range v {
-					if strings.HasPrefix(value, enumInput) {
-						suggestions = append(suggestions, prompt.Suggest{Text: value})
-					}
+	for k, v := range enumVals {
+		if (match[1] == "-" && match[2] == k.short) || (match[1] == "--" && match[2] == k.long) {
+			enumInput := match[4]
+
+			for _, value := range v {
+				if strings.HasPrefix(value, enumInput) {
+					suggestions = append(suggestions, prompt.Suggest{Text: value})
 				}
 			}
 		}
 	}
 
-	return matched, suggestions
+	return true, suggestions
 }
 
 func isInParameter(doc prompt.Document) (isInParameter bool) {
@@ -357,12 +376,12 @@ func getCmdFlags(cmd interface{}) (flags []flag) {
 	return flags
 }
 
-func findFlagByShort(flags []flag, short string) (flag flag) {
+func findFlagByShort(flags []flag, short string) (flag *flag) {
 	for _, f := range flags {
 		if f.short == short {
-			return f
+			return &f
 		}
 	}
 
-	panic("Oops")
+	return nil
 }
