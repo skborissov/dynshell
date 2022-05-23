@@ -8,6 +8,13 @@ import (
 	"github.com/jessevdk/go-flags"
 )
 
+type opts struct {
+	// TODO get region from aws config?
+	EndpointUrl string `long:"endpoint-url" description:"Override the default URL with a given URL"`
+	Region      string `long:"region" description:"The region to use" required:"true"`
+	Verbose     bool   `short:"v" long:"verbose" description:"Verbose output"`
+}
+
 type tableContext struct {
 	name           string
 	hashAttribute  string
@@ -25,14 +32,8 @@ func createDynamo(endpointUrl *string, region *string) *dynamodb.DynamoDB {
 	return dynamodb.New(session)
 }
 
-var opts struct {
-	// TODO get region from aws config?
-	EndpointUrl string `long:"endpoint-url" description:"Override the default URL with a given URL"`
-	Region      string `long:"region" description:"The region to use" required:"true"`
-	Verbose     bool   `short:"v" long:"verbose" description:"Verbose output"`
-}
-
 func main() {
+	opts := opts{}
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		panic(err)
@@ -54,7 +55,7 @@ func main() {
 	}
 
 	p := prompt.New(
-		newExecutor(dynamo, &tableCtx).execute,
+		newExecutor(dynamo, &tableCtx, opts.Verbose).execute,
 		newCompleter(&tableCtx).complete,
 		prompt.OptionTitle("dynshell"),
 		prompt.OptionLivePrefix(livePrefix),

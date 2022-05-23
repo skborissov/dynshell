@@ -9,7 +9,7 @@ import (
 	"github.com/c-bata/go-prompt"
 )
 
-var commands []string = []string{"exit", "use", "desc", "query", "scan", "delete", "update"}
+var commands []string = []string{"exit", "use", "desc", "query", "scan", "delete", "update", "put"}
 
 func newCompleter(tableCtx *tableContext) completer {
 	return completer{tableCtx: tableCtx}
@@ -41,6 +41,8 @@ func (c completer) complete(doc prompt.Document) []prompt.Suggest {
 		return c.completeDelete(doc)
 	case "update":
 		return c.completeUpdate(doc)
+	case "put":
+		return c.completePut(doc)
 	default:
 		return []prompt.Suggest{}
 	}
@@ -108,21 +110,19 @@ func (c completer) completeQuery(doc prompt.Document) (suggestions []prompt.Sugg
 		return suggestions
 	}
 
-	unusedFlags := getUnusedFlags(doc, &readOpts{})
-	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &queryOpts{})...)
+	unusedFlags := getUnusedFlags(doc, &queryOpts{})
 
 	return c.completeRead(doc, unusedFlags)
 }
 
 func (c completer) completeScan(doc prompt.Document) (suggestions []prompt.Suggest) {
-	unusedFlags := getUnusedFlags(doc, &readOpts{})
-	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &scanOpts{})...)
+	unusedFlags := getUnusedFlags(doc, &scanOpts{})
 
 	return c.completeRead(doc, unusedFlags)
 }
 
 func (c completer) completeRead(doc prompt.Document, unusedFlags []flag) (suggestions []prompt.Suggest) {
-	readFlags := getCmdFlags(&readOpts{})
+	readFlags := getCmdFlags((*readOpts)(nil))
 
 	enumFlags := map[flag][]string{}
 
@@ -150,8 +150,13 @@ func (c completer) completeDelete(doc prompt.Document) (suggestions []prompt.Sug
 }
 
 func (c completer) completeUpdate(doc prompt.Document) (suggestions []prompt.Suggest) {
-	unusedFlags := getUnusedFlags(doc, &writeOpts{})
-	unusedFlags = append(unusedFlags, getUnusedFlags(doc, &updateOpts{})...)
+	unusedFlags := getUnusedFlags(doc, &updateOpts{})
+
+	return c.completeWrite(doc, unusedFlags)
+}
+
+func (c completer) completePut(doc prompt.Document) (suggestions []prompt.Suggest) {
+	unusedFlags := getUnusedFlags(doc, &putOpts{})
 
 	return c.completeWrite(doc, unusedFlags)
 }
@@ -167,7 +172,7 @@ func (c completer) completeWrite(doc prompt.Document, unusedFlags []flag) (sugge
 		return suggestions
 	}
 
-	writeFlags := getCmdFlags(&writeOpts{})
+	writeFlags := getCmdFlags((*writeOpts)(nil))
 	enumFlags := map[flag][]string{}
 
 	capacityFlag := findFlagByShort(writeFlags, "r")
@@ -357,13 +362,15 @@ OUTER:
 }
 
 func getCmdFlags(cmd interface{}) (flags []flag) {
-	t := reflect.TypeOf(cmd).Elem()
+	return getCmdFlagsForType(reflect.TypeOf(cmd).Elem())
+}
 
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
+func getCmdFlagsForType(cmd reflect.Type) (flags []flag) {
+	for i := 0; i < cmd.NumField(); i++ {
+		field := cmd.Field(i)
 
 		if field.Type.Kind() == reflect.Struct {
-			continue
+			flags = append(flags, getCmdFlagsForType(field.Type)...)
 		} else {
 			short := field.Tag.Get("short")
 			long := field.Tag.Get("long")

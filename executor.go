@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -16,10 +17,11 @@ import (
 type executor struct {
 	dynamo   *dynamodb.DynamoDB
 	tableCtx *tableContext
+	verbose  bool
 }
 
-func newExecutor(dynamo *dynamodb.DynamoDB, tableCtx *tableContext) executor {
-	return executor{dynamo: dynamo, tableCtx: tableCtx}
+func newExecutor(dynamo *dynamodb.DynamoDB, tableCtx *tableContext, verbose bool) executor {
+	return executor{dynamo: dynamo, tableCtx: tableCtx, verbose: verbose}
 }
 
 type readOpts struct {
@@ -47,7 +49,6 @@ type scanOpts struct {
 }
 
 type writeOpts struct {
-	Key                         string `short:"k" long:"key" description:"Key expression" required:"true"`
 	ConsumedCapacity            string `short:"r" long:"return-consumed-capacity" description:"Return consumed capacity" required:"false"`
 	ConditionExpression         string `short:"c" long:"condition-expression" description:"Condition expression" required:"false"`
 	ReturnValues                bool   `short:"v" long:"return-values" description:"Return deleted item values" required:"false"`
@@ -56,18 +57,27 @@ type writeOpts struct {
 
 type deleteOpts struct {
 	writeOpts
+	Key string `short:"k" long:"key" description:"Key expression" required:"true"`
 }
 
 type updateOpts struct {
 	writeOpts
 	Update string `short:"u" long:"update" description:"Update expression" required:"true"`
+	Key    string `short:"k" long:"key" description:"Key expression" required:"true"`
+}
+
+type putOpts struct {
+	writeOpts
+	Item string `short:"i" long:"item" description:"Item as a map" required:"true"`
 }
 
 func (e executor) execute(input string) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println(r)
-			// if debug is not on and input is given, print input
+			if e.verbose {
+				fmt.Println(string(debug.Stack()))
+			}
 		}
 	}()
 
@@ -105,6 +115,8 @@ func (e executor) handleInput(input string) {
 		e.handleDelete(args)
 	case "update":
 		e.handleUpdate(args)
+	case "put":
+		e.handlePut(args)
 	default:
 		fmt.Println("Unknown command: " + command)
 	}
@@ -200,7 +212,7 @@ func (e executor) handleQuery(args string) {
 		queryInput.SetScanIndexForward(false)
 	}
 
-	if opts.Verbose {
+	if e.verbose {
 		fmt.Printf("DEBUG input: %v\n", queryInput)
 	}
 
@@ -208,7 +220,7 @@ func (e executor) handleQuery(args string) {
 	if err == nil {
 		fmt.Println(prettify(queryOutput))
 	} else {
-		handleDynamoError(err, queryInput.String())
+		e.handleDynamoError(err, queryInput.String())
 	}
 }
 
@@ -257,7 +269,7 @@ func (e executor) handleScan(args string) {
 		scanInput.SetTotalSegments(*scanOpts.TotalSegments)
 	}
 
-	if opts.Verbose {
+	if e.verbose {
 		fmt.Printf("DEBUG input: %v\n", scanInput)
 	}
 
@@ -265,7 +277,7 @@ func (e executor) handleScan(args string) {
 	if err == nil {
 		fmt.Println(prettify(scanOutput))
 	} else {
-		handleDynamoError(err, scanInput.String())
+		e.handleDynamoError(err, scanInput.String())
 	}
 }
 
@@ -311,7 +323,7 @@ func (e executor) handleDelete(args string) {
 		deleteItemInput.SetReturnItemCollectionMetrics("SIZE")
 	}
 
-	if opts.Verbose {
+	if e.verbose {
 		fmt.Printf("DEBUG input: %v\n", deleteItemInput)
 	}
 
@@ -319,7 +331,7 @@ func (e executor) handleDelete(args string) {
 	if err == nil {
 		fmt.Println(prettify(deleteOutput))
 	} else {
-		handleDynamoError(err, deleteItemInput.String())
+		e.handleDynamoError(err, deleteItemInput.String())
 	}
 }
 
@@ -364,7 +376,7 @@ func (e executor) handleUpdate(args string) {
 		updateItemInput.SetReturnItemCollectionMetrics("SIZE")
 	}
 
-	if opts.Verbose {
+	if e.verbose {
 		fmt.Printf("DEBUG input: %v\n", updateItemInput)
 	}
 
@@ -372,9 +384,59 @@ func (e executor) handleUpdate(args string) {
 	if err == nil {
 		fmt.Println(prettify(updateOutput))
 	} else {
-		handleDynamoError(err, updateItemInput.String())
+		e.handleDynamoError(err, updateItemInput.String())
+	}
+}
+
+func (e executor) handlePut(args string) {
+	e.validateTableSelected()
+
+	putOpts := putOpts{}
+
+	_, err := flags.ParseArgs(&putOpts, parseArgs(args))
+	if err != nil {
+		return
 	}
 
+	item, _, itemParseErr := tryParseMap(strings.Trim(putOpts.Item, " "))
+	if itemParseErr != nil {
+		panic(itemParseErr)
+	}
+
+	exprParser := newExprParser()
+
+	condition := exprParser.parseGenericExpression(putOpts.ConditionExpression)
+
+	putItemInput := dynamodb.PutItemInput{
+		TableName:                 &e.tableCtx.name,
+		Item:                      item.M,
+		ConditionExpression:       condition,
+		ExpressionAttributeNames:  exprParser.getNames(),
+		ExpressionAttributeValues: exprParser.getValues(),
+	}
+
+	if putOpts.ConsumedCapacity != "" {
+		putItemInput.SetReturnConsumedCapacity(putOpts.ConsumedCapacity)
+	}
+
+	if putOpts.ReturnValues {
+		putItemInput.SetReturnValues("ALL_OLD")
+	}
+
+	if putOpts.ReturnItemCollectionMetrics {
+		putItemInput.SetReturnItemCollectionMetrics("SIZE")
+	}
+
+	if e.verbose {
+		fmt.Printf("DEBUG input: %v\n", putItemInput)
+	}
+
+	putOutput, err := e.dynamo.PutItem(&putItemInput)
+	if err == nil {
+		fmt.Println(prettify(putOutput))
+	} else {
+		e.handleDynamoError(err, putItemInput.String())
+	}
 }
 
 func (e executor) validateTableSelected() {
@@ -383,9 +445,9 @@ func (e executor) validateTableSelected() {
 	}
 }
 
-func handleDynamoError(err error, cmdInput string) {
+func (e executor) handleDynamoError(err error, cmdInput string) {
 	errOut := err.Error()
-	if !opts.Verbose {
+	if !e.verbose {
 		errOut = errOut + "\n" + "DEBUG input: \n" + cmdInput
 	}
 	panic(errOut)
